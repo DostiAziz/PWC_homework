@@ -4,11 +4,15 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from pwc_support.domain.models import RagRequest
 from pwc_support.domain.state import SupportState
+from pwc_support.rag.answer import RagAnswerer
 from pwc_support.workflow.policy import ReviewPolicy
 
 
-def build_graph(*, policy: ReviewPolicy | None = None) -> Any:
+def build_graph(
+    *, policy: ReviewPolicy | None = None, rag_answerer: RagAnswerer | None = None
+) -> Any:
     review_policy = policy or ReviewPolicy.default()
 
     def intake(state: SupportState) -> dict[str, Any]:
@@ -48,6 +52,13 @@ def build_graph(*, policy: ReviewPolicy | None = None) -> Any:
 
     def compose_reply(state: SupportState) -> dict[str, Any]:
         body = state["message"]["body"]
+        if rag_answerer is not None:
+            result = rag_answerer.answer(RagRequest(question=body))
+            return {
+                "rag_results": [result.model_dump(mode="json")],
+                "draft": {"text": result.answer},
+                "events": [{"node": "compose_reply", "event_type": "completed"}],
+            }
         return {
             "draft": {
                 "text": (
@@ -59,10 +70,18 @@ def build_graph(*, policy: ReviewPolicy | None = None) -> Any:
         }
 
     def verify_response(state: SupportState) -> dict[str, Any]:
+        if state.get("rag_results", [{}])[0].get("status") == "insufficient_evidence":
+            return {
+                "verification": {"route": "review"},
+                "events": [{"node": "verify_response", "event_type": "review"}],
+            }
         return {
             "verification": {"route": "release"},
             "events": [{"node": "verify_response", "event_type": "completed"}],
         }
+
+    def route_after_verification(state: SupportState) -> Literal["finalise_case", "human_review"]:
+        return "human_review" if state["verification"]["route"] == "review" else "finalise_case"
 
     def human_review(state: SupportState) -> dict[str, Any]:
         return {
@@ -95,7 +114,7 @@ def build_graph(*, policy: ReviewPolicy | None = None) -> Any:
     builder.add_edge("plan_work", "case_tools")
     builder.add_edge("case_tools", "compose_reply")
     builder.add_edge("compose_reply", "verify_response")
-    builder.add_edge("verify_response", "finalise_case")
+    builder.add_conditional_edges("verify_response", route_after_verification)
     builder.add_edge("human_review", END)
     builder.add_edge("finalise_case", END)
     return builder.compile()
