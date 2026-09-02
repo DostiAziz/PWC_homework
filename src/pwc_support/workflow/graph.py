@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from pwc_support.domain.models import RagRequest
 from pwc_support.domain.state import SupportState
@@ -11,7 +12,11 @@ from pwc_support.workflow.policy import ReviewPolicy
 
 
 def build_graph(
-    *, policy: ReviewPolicy | None = None, rag_answerer: RagAnswerer | None = None
+    *,
+    policy: ReviewPolicy | None = None,
+    rag_answerer: RagAnswerer | None = None,
+    enable_interrupt: bool = False,
+    checkpointer: Any = None,
 ) -> Any:
     review_policy = policy or ReviewPolicy.default()
 
@@ -84,6 +89,19 @@ def build_graph(
         return "human_review" if state["verification"]["route"] == "review" else "finalise_case"
 
     def human_review(state: SupportState) -> dict[str, Any]:
+        if enable_interrupt:
+            review = interrupt({
+                "type": "human_review_required",
+                "categories": state.get("triage", {}).get("review_categories", []),
+                "message": state["message"]["body"],
+            })
+            return {
+                "delivery": {
+                    "message": review.get("reply", "Your enquiry has been reviewed.")
+                },
+                "outcome": {"status": "answered"},
+                "events": [{"node": "human_review", "event_type": "resumed"}],
+            }
         return {
             "delivery": {
                 "message": "Your enquiry has been received and is pending specialist review."
@@ -117,4 +135,4 @@ def build_graph(
     builder.add_conditional_edges("verify_response", route_after_verification)
     builder.add_edge("human_review", END)
     builder.add_edge("finalise_case", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
