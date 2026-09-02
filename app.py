@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from pwc_support.bootstrap import build_runtime
 from pwc_support.workflow.graph import build_graph
 
 st.set_page_config(page_title="PwC Client Support Prototype", page_icon="💬")
@@ -12,6 +13,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pending_reviews" not in st.session_state:
     st.session_state.pending_reviews = []
+if "runtime_error" not in st.session_state:
+    st.session_state.runtime_error = None
 
 client_tab, email_tab, review_tab = st.tabs(["Client chat", "Simulated email", "Human review"])
 
@@ -25,7 +28,14 @@ with client_tab:
     question = st.chat_input("Ask a general question about PwC services")
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
-        result = build_graph().invoke({"message": {"body": question}})
+        try:
+            graph = build_runtime()
+            result = graph.invoke({"message": {"body": question}})
+            st.session_state.runtime_error = None
+        except Exception as error:
+            graph = build_graph()
+            result = graph.invoke({"message": {"body": question}})
+            st.session_state.runtime_error = str(error)
         outcome = result.get("outcome", {})
         status = outcome.get("status", "unknown")
         response = result.get("delivery", {}).get("message", "No response was produced.")
@@ -35,6 +45,12 @@ with client_tab:
         if status == "pending_review":
             st.session_state.pending_reviews.append({"question": question, "response": response})
         st.rerun()
+
+if st.session_state.runtime_error:
+    st.sidebar.warning(
+        "Local Ollama/Chroma runtime unavailable. Showing deterministic fallback. "
+        "Run the runtime check and corpus ingestion scripts."
+    )
 
 with email_tab:
     st.subheader("Simulated inbox")
