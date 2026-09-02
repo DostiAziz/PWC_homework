@@ -2,10 +2,10 @@
   "version": "1",
   "language": "en",
   "documents": [
-    {"source_id": "pwc-global-services", "path": "documents/pwc-global-services.md", "title": "PwC global services", "url": "https://www.pwc.com/gx/en/services.html"},
-    {"source_id": "pwc-financial-services", "path": "documents/pwc-financial-services.md", "title": "PwC financial services", "url": "https://www.pwc.com/gx/en/industries/financial-services.html"},
-    {"source_id": "pwc-industries", "path": "documents/pwc-industries.md", "title": "PwC industries", "url": "https://www.pwc.com/gx/en/industries.html"},
-    {"source_id": "pwc-network-structure", "path": "documents/pwc-network-structure.md", "title": "PwC network structure", "url": "https://www.pwc.com/gx/en/about/corporate-governance/network-structure.html"},
-    {"source_id": "synthetic-support-faq", "path": "documents/synthetic-support-faq.md", "title": "Synthetic support FAQ", "url": null}
+    {"source_id": "pwc-global-services", "version": "2026-09-02", "path": "documents/pwc-global-services.md", "title": "PwC global services", "url": "https://www.pwc.com/gx/en/services.html"},
+    {"source_id": "pwc-financial-services", "version": "2026-09-02", "path": "documents/pwc-financial-services.md", "title": "PwC financial services", "url": "https://www.pwc.com/gx/en/industries/financial-services.html"},
+    {"source_id": "pwc-industries", "version": "2026-09-02", "path": "documents/pwc-industries.md", "title": "PwC industries", "url": "https://www.pwc.com/gx/en/industries.html"},
+    {"source_id": "pwc-network-structure", "version": "2026-09-02", "path": "documents/pwc-network-structure.md", "title": "PwC network structure", "url": "https://www.pwc.com/gx/en/about/corporate-governance/network-structure.html"},
+    {"source_id": "synthetic-support-faq", "version": "2026-09-02", "path": "documents/synthetic-support-faq.md", "title": "Synthetic support FAQ", "url": null}
   ]
 }

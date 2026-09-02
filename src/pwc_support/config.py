@@ -24,6 +24,9 @@ class Settings(BaseModel):
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     max_parallel_generations: int = Field(default=1, ge=1, le=2)
     embedding_batch_size: int = Field(default=16, ge=1, le=64)
+    chunk_size_tokens: int = Field(default=300, ge=20, le=2000)
+    chunk_overlap_tokens: int = Field(default=50, ge=0, le=500)
+    context_document_max_chars: int = Field(default=24000, ge=2000, le=100000)
     max_planned_tasks: int = Field(default=4, ge=1, le=4)
     max_revisions: int = Field(default=2, ge=0, le=2)
 
@@ -39,10 +42,16 @@ class Settings(BaseModel):
     def chroma_path(self) -> Path:
         return self.data_dir / "chroma"
 
+    @property
+    def lexical_db(self) -> Path:
+        return self.data_dir / "state" / "lexical.sqlite3"
+
     @model_validator(mode="after")
     def protect_mac_profile(self) -> Settings:
         if self.max_parallel_generations > 1 and self.num_ctx > 8192:
             raise ValueError("parallel generation above one requires num_ctx <= 8192")
+        if self.chunk_overlap_tokens >= self.chunk_size_tokens:
+            raise ValueError("chunk overlap must be smaller than chunk size")
         return self
 
     @classmethod
@@ -53,4 +62,6 @@ class Settings(BaseModel):
             chroma_mode=cast(Literal["persistent", "http"], os.getenv("CHROMA_MODE", "persistent")),
             chroma_host=os.getenv("CHROMA_HOST", "127.0.0.1"),
             chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
+            chunk_size_tokens=int(os.getenv("PWC_CHUNK_SIZE_TOKENS", "300")),
+            chunk_overlap_tokens=int(os.getenv("PWC_CHUNK_OVERLAP_TOKENS", "50")),
         )

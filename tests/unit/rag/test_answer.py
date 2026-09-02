@@ -1,5 +1,5 @@
 from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from pwc_support.rag.answer import RagAnswerer
+from pwc_support.rag.answer import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:
@@ -12,7 +12,14 @@ class FakeKnowledgeBase:
 
 
 class FakeGenerator:
-    def text(self, *, system: str, user: str, max_tokens: int = 512) -> str:
+    def text(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_tokens: int = 512,
+        temperature: float = 0.2,
+    ) -> str:
         return "PwC provides consulting services. [S1]"
 
 
@@ -24,3 +31,10 @@ def test_rag_answerer_returns_grounded_answer_and_citation() -> None:
     assert result.status == "answered"
     assert result.citations[0].marker == "[S1]"
     assert result.citations[0].source_id == "source-1"
+
+
+def test_query_preparation_resolves_customer_support_pronouns() -> None:
+    assert prepare_query("What services do you provide?") == (
+        "What services do you provide? PwC business services"
+    )
+    assert prepare_query("What services does PwC provide?") == "What services does PwC provide?"
