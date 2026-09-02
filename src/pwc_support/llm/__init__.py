@@ -1,0 +1,1 @@
+"""Local Ollama model adapters."""
