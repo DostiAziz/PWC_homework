@@ -1,0 +1,7 @@
+{
+  "top_k": 6,
+  "minimum_similarity": 0.45,
+  "max_selected_hits": 4,
+  "max_evidence_chars": 6000,
+  "hard_filters": {"language": "en", "source_status": "active"}
+}

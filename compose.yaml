@@ -1,0 +1,24 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      PWC_DATA_DIR: /app/data
+      CHROMA_MODE: http
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      - chroma
+  chroma:
+    image: chromadb/chroma:1.5.9
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/data
+
+volumes:
+  app-data:
+  chroma-data:
