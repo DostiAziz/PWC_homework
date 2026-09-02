@@ -1,3 +1,6 @@
 .worktrees/
 .superpowers/
 .playwright-mcp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
