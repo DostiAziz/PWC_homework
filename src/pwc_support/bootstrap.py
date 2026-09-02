@@ -8,6 +8,7 @@ import ollama
 from pwc_support.config import Settings
 from pwc_support.llm.ollama import OllamaEmbedder, OllamaGenerator
 from pwc_support.rag.answer import RagAnswerer
+from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase
 from pwc_support.workflow.graph import build_graph
 
@@ -26,6 +27,11 @@ def build_runtime(settings: Settings | None = None) -> Any:
         chroma_client,
         resolved.collection_name,
         OllamaEmbedder(ollama_client, resolved.embedding_model),
+        LexicalIndex(resolved.lexical_db),
     )
+    if knowledge_base.count() == 0:
+        raise RuntimeError(
+            "Chroma knowledge base is empty. Run scripts/ingest_corpus.py first."
+        )
     generator = OllamaGenerator(ollama_client, resolved.generation_model)
     return build_graph(rag_answerer=RagAnswerer(knowledge_base, generator))

@@ -5,6 +5,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from pwc_support.rag.ingest import CorpusDocument
+
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -34,10 +36,42 @@ class OllamaGenerator:
         content = response["message"]["content"]
         return schema.model_validate(json.loads(content))
 
-    def text(self, *, system: str, user: str, max_tokens: int = 512) -> str:
+    def text(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_tokens: int = 512,
+        temperature: float = 0.2,
+    ) -> str:
         response = self.client.chat(
             model=self.model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            options={"temperature": 0.2, "num_predict": max_tokens},
+            options={"temperature": temperature, "num_predict": max_tokens},
         )
         return str(response["message"]["content"]).strip()
+
+
+class OllamaContextualizer:
+    """Generate Anthropic-style chunk context locally during ingestion."""
+
+    def __init__(self, generator: OllamaGenerator, *, max_document_chars: int = 24000) -> None:
+        self.generator = generator
+        self.max_document_chars = max_document_chars
+
+    def contextualize(
+        self, *, document: CorpusDocument, heading: str, chunk: str
+    ) -> str:
+        bounded_document = document.text[: self.max_document_chars]
+        return self.generator.text(
+            system=(
+                "Write only a short context that situates the chunk in its source document "
+                "for retrieval. Preserve names, sector, service, territory and time scope."
+            ),
+            user=(
+                f"<document title='{document.title}'>\n{bounded_document}\n</document>\n"
+                f"<heading>{heading}</heading>\n<chunk>{chunk}</chunk>"
+            ),
+            max_tokens=100,
+            temperature=0.0,
+        )

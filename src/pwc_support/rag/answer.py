@@ -5,6 +5,14 @@ from typing import Any
 from pwc_support.domain.models import Citation, RagRequest, RagResult
 
 
+def prepare_query(question: str) -> str:
+    normalized = question.casefold()
+    refers_to_assistant = " you" in f" {normalized}" or " your" in f" {normalized}"
+    if refers_to_assistant and "pwc" not in normalized:
+        return f"{question} PwC business services"
+    return question
+
+
 class RagAnswerer:
     """Answer only from retrieved evidence and expose its source mapping."""
 
@@ -16,8 +24,15 @@ class RagAnswerer:
         self.minimum_similarity = minimum_similarity
 
     def answer(self, request: RagRequest) -> RagResult:
-        batch = self.knowledge_base.retrieve(request)
-        hits = tuple(hit for hit in batch.hits if hit.similarity >= self.minimum_similarity)
+        prepared_request = request.model_copy(
+            update={"question": prepare_query(request.question)}
+        )
+        batch = self.knowledge_base.retrieve(prepared_request)
+        hits = tuple(
+            hit
+            for hit in batch.hits
+            if hit.similarity >= self.minimum_similarity or hit.source_type == "lexical"
+        )
         if not hits:
             return RagResult(
                 status="insufficient_evidence",
