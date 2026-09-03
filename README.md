@@ -223,26 +223,26 @@ Everything runs on local open-source models through Ollama on a 24 GB M4. No pai
 | Role | Model | Why |
 |---|---|---|
 | Generation | `gpt-oss:20b` (Q4, ~13 GB resident) | Best instruction-following of the local options for "answer only from evidence and keep the markers" |
-| Embeddings | `nomic-embed-text` (768-d) | Small, fast (~31 ms per retrieval including BM25 and fusion), good enough separation on this corpus |
+| Embeddings | `nomic-embed-text` (768-d) | Small, fast (~28 ms per retrieval including BM25 and fusion), good enough separation on this corpus |
 
 The trade-offs are real and were measured, not assumed:
 
 - **Memory.** `gpt-oss:20b` at Q4 leaves little headroom on 24 GB alongside Chroma, SQLite and
   Streamlit. `Settings` therefore caps `num_ctx` at 8192 and refuses parallel generation above one
   worker unless the context window is reduced.
-- **Concurrency buys nothing.** Doubling concurrency raised p95 latency by 1.47× while throughput
-  moved 0.275 → 0.305 req/s (+11%). One Ollama model instance is a serialised resource; the right
+- **Concurrency buys nothing.** Doubling concurrency raised p95 latency by 1.82× while throughput
+  moved 0.301 → 0.308 req/s (+2%). One Ollama model instance is a serialised resource; the right
   answer is to queue, not to add threads.
 - **Quality vs latency is a genuine choice.** Swapping generation to `llama3.2:3b`
-  (`PWC_GENERATION_MODEL=llama3.2:3b`) cut p50 from 4075 ms to 627 ms (6.5×) and raised throughput
-  4.6×, at 93.8% evaluation accuracy instead of 100%. The one regression was a real one: the
+  (`PWC_GENERATION_MODEL=llama3.2:3b`) cut p50 from 3872 ms to 636 ms (6.1×) and raised throughput
+  5.0×, at 93.8% evaluation accuracy instead of 100%. The one regression was a real one: the
   smaller model omitted its citation markers on a case, and verification correctly withheld the
   answer rather than sending it unattributed.
 - **Determinism.** Answer generation runs at temperature 0 so a support desk gives the same client
   the same cited answer twice.
-- **Token caps do not help.** Reducing `answer_tokens` from 512 to 256 changed p50 by ~0.5%
-  (3616 → 3597 ms): the model is not hitting the cap, so latency is bounded by what it chooses to
-  write, not by the limit.
+- **Token caps do not help.** Reducing `answer_tokens` from 512 to 256 left p50 unchanged within
+  run-to-run noise (3872 → 3922 ms, i.e. marginally worse): the model never reaches the cap, so
+  latency is bounded by what it chooses to write, not by the limit.
 
 ## Evaluation results
 
@@ -262,7 +262,7 @@ PYTHONPATH=src .venv/bin/python scripts/run_evaluation.py
 | `tasks` | The enquiry decomposed into the expected task kinds | 100% |
 | `attribution` | A released answer carries a marker resolving to a real citation | 100% |
 
-**16/16 cases pass (100%)**, in 34.5 s total. Full per-case output, including cited sources, visited
+**16/16 cases pass (100%)**, in 43.5 s total. Full per-case output, including cited sources, visited
 nodes and latencies, is in `artifacts/evaluation/final-result.json`.
 
 The set spans answerable questions across all five sources, a multi-part enquiry requiring
@@ -284,32 +284,32 @@ PYTHONPATH=src .venv/bin/python scripts/run_load.py
 
 | Concurrency | p50 | p95 | p99 | Throughput | Failures |
 |---|---|---|---|---|---|
-| 1 | 4075 ms | 6466 ms | 7506 ms | 0.275 req/s | 0 |
-| 2 | 7930 ms | 9532 ms | 9681 ms | 0.305 req/s | 0 |
+| 1 | 3872 ms | 5294 ms | 5742 ms | 0.301 req/s | 0 |
+| 2 | 7824 ms | 9635 ms | 9650 ms | 0.308 req/s | 0 |
 
 **Measured bottleneck: token generation.** `execute_task` accounts for 99.9% of measured node time,
 and within the RAG subgraph the split is:
 
 | Stage | Share of RAG time | Mean |
 |---|---|---|
-| `answer_with_citations` | 99.0% | 4083 ms |
-| `retrieve_candidates` | 1.0% | 31 ms |
+| `answer_with_citations` | 99.3% | 4113 ms |
+| `retrieve_candidates` | 0.7% | 28 ms |
 | `select_evidence`, `prepare_query` | ~0% | <1 ms |
 
-Retrieval — embedding, Chroma query, BM25, fusion, cosine scoring — is 31 ms. It is not the problem
-and does not need optimising. Doubling concurrency multiplied p95 by 1.47× while throughput moved
-1.11×, which is the signature of one serialised resource (the single Ollama model instance) rather
+Retrieval — embedding, Chroma query, BM25, fusion, cosine scoring — is 28 ms. It is not the problem
+and does not need optimising. Doubling concurrency multiplied p95 by 1.82× while throughput moved
+1.02×, which is the signature of one serialised resource (the single Ollama model instance) rather
 than client-side overhead.
 
 **Evidence-based recommendations:**
 
 1. **To cut latency, change the generation model, not the pipeline.** `llama3.2:3b` measured
-   6.5× lower p50 and 4.6× higher throughput at 93.8% accuracy. Everything else in the workflow is
+   6.1× lower p50 and 5.0× higher throughput at 93.8% accuracy. Everything else in the workflow is
    already sub-millisecond, so no amount of pipeline tuning can produce a comparable gain.
-2. **Do not add request concurrency; add a queue.** Concurrency 2 bought 11% throughput for 47%
+2. **Do not add request concurrency; add a queue.** Concurrency 2 bought 2% throughput for 82%
    worse p95. Keep `max_parallel_generations` at 1 and apply admission control, or run a second
    Ollama instance if the hardware allows.
-3. **Retrieval quality is nearly free to improve.** At 31 ms, raising `top_k` or adding a reranking
+3. **Retrieval quality is nearly free to improve.** At 28 ms, raising `top_k` or adding a reranking
    stage is affordable if answer quality ever needs it.
 
 Full output, including per-request latencies and per-node profiles, is in
