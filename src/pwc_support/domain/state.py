@@ -15,7 +15,6 @@ class SupportState(TypedDict, total=False):
     thread_id: str
     client_id: str
     channel: str
-    duplicate: bool
     case_id: str | None
     triage: dict[str, Any]
     plan: dict[str, Any]
@@ -30,7 +29,6 @@ class SupportState(TypedDict, total=False):
     verification: dict[str, Any]
     review_request: dict[str, Any]
     review_decision: dict[str, Any]
-    revision_count: int
     events: Annotated[list[dict[str, Any]], append_events]
     delivery: dict[str, Any]
     error: dict[str, Any]

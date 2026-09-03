@@ -144,7 +144,6 @@ def build_graph(
             "client_id": client_id,
             "channel": channel,
             "draft_version": 1,
-            "revision_count": 0,
             "events": [_event("intake", "completed", started, channel=channel,
                               characters=len(body))],
         }

@@ -29,7 +29,6 @@ class Settings(BaseModel):
     chunk_overlap_tokens: int = Field(default=50, ge=0, le=500)
     context_document_max_chars: int = Field(default=24000, ge=2000, le=100000)
     max_planned_tasks: int = Field(default=4, ge=1, le=4)
-    max_revisions: int = Field(default=2, ge=0, le=2)
     top_k: int = Field(default=6, ge=1, le=20)
     minimum_similarity: float = Field(default=0.45, ge=0.0, le=1.0)
     max_selected_hits: int = Field(default=4, ge=1, le=10)
