@@ -13,7 +13,6 @@ from pwc_support.bootstrap import Runtime, build_runtime
 from pwc_support.config import Settings
 from pwc_support.domain.models import (
     Channel,
-    ReviewDecision,
     ReviewDecisionKind,
     ReviewRequest,
 )
@@ -44,6 +43,7 @@ def get_application() -> Application:
         reviews=runtime.reviews,
         database=runtime.database,
         mailbox=runtime.mailbox,
+        review_service=runtime.review_service,
     )
     return Application(runtime=runtime, service=service, stack=stack)
 
@@ -225,11 +225,7 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
 
 def render_review(service: ClientSupportService) -> None:
     st.subheader("Pending specialist reviews")
-    st.caption(
-        "Each decision resumes the paused LangGraph run from its SQLite checkpoint, so the "
-        "client reply is produced by the workflow rather than by this page. Reviews survive "
-        "a restart: the checkpoint namespace is stored with the request."
-    )
+    st.caption("Reviews are durable SQLite cases. Decisions are applied asynchronously and delivered through the simulated mailbox.")
     pending = service.pending_reviews()
     if not pending:
         st.info("No pending reviews. Sensitive enquiries appear here as soon as they pause.")
@@ -240,7 +236,6 @@ def render_review(service: ClientSupportService) -> None:
 
 def _render_review_card(service: ClientSupportService, review: ReviewRequest) -> None:
     key = str(review.review_id)
-    checkpoint_id = review.checkpoint_id
     with st.container(border=True):
         st.markdown(f"**Case {review.case_id}** · review `{key[:8]}`")
         st.caption(f"Categories: {', '.join(sorted(review.categories)) or 'none'}")
@@ -259,45 +254,33 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest) ->
                         st.markdown(f"**{label}** *(synthetic source)*")
                     st.caption(f"similarity {citation.similarity:.2f}")
                     st.text(citation.excerpt[:400])
-        proposed = review.proposed_reply.text if review.proposed_reply else ""
+        proposed = ""
         kind = st.selectbox(
             "Decision",
-            [item.value for item in ReviewDecisionKind],
+            [
+                ReviewDecisionKind.SEND_RESPONSE.value,
+                ReviewDecisionKind.TAKE_OWNERSHIP.value,
+                ReviewDecisionKind.REJECT.value,
+            ],
             key=f"kind-{key}",
         )
         edited = st.text_area(
             "Reply to the client",
-            value=proposed or "A specialist will contact you shortly.",
+            value=proposed,
             key=f"text-{key}",
         )
         reviewer = st.text_input("Reviewer", value="specialist-1", key=f"reviewer-{key}")
-        if checkpoint_id is None:
-            st.warning(
-                "This review predates checkpoint tracking, so its paused run cannot be "
-                "addressed. Resolve it outside this queue."
-            )
-            return
         if st.button("Submit decision", key=f"submit-{key}", type="primary"):
-            decision = ReviewDecision(
+            result = service.decide_review(
                 review_id=review.review_id,
-                kind=ReviewDecisionKind(kind),
+                decision_id=uuid4(),
+                expected_version=review.response_version,
                 reviewer_id=reviewer,
-                response_version=review.response_version,
-                edited_text=edited or None,
+                kind=ReviewDecisionKind(kind),
+                reviewed_text=edited or None,
+                reason="reviewer decision",
             )
-            with st.spinner("Resuming the checkpointed workflow…"):
-                run = service.resume(checkpoint_id=checkpoint_id, decision=decision)
-            st.session_state.messages.append(
-                {
-                    "role": "assistant",
-                    "content": run.outcome.message,
-                    "status": run.outcome.status.value,
-                    "citations": [
-                        citation.model_dump(mode="json") for citation in run.outcome.citations
-                    ],
-                    "run": run,
-                }
-            )
+            st.success(f"Decision recorded: {result.case_status.value}")
             st.rerun()
 
 

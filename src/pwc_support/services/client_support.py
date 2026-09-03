@@ -53,11 +53,13 @@ class ClientSupportService:
         reviews: Any = None,
         database: Any = None,
         mailbox: Any = None,
+        review_service: Any = None,
     ) -> None:
         self.graph = graph
         self.reviews = reviews
         self.database = database
         self.mailbox = mailbox
+        self.review_service = review_service
 
     def submit(
         self,
@@ -122,6 +124,13 @@ class ClientSupportService:
 
     def pending_reviews(self) -> list[ReviewRequest]:
         return [] if self.reviews is None else list(self.reviews.list_pending())
+
+    def decide_review(self, **kwargs: Any) -> Any:
+        if self.review_service is not None:
+            return self.review_service.decide(**kwargs)
+        if self.reviews is None:
+            raise RuntimeError("review persistence is not configured")
+        return self.reviews.decide(**kwargs)
 
     def _finish(
         self,
