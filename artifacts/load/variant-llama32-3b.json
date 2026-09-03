@@ -6,92 +6,98 @@
     {
       "requests": 20,
       "concurrency": 1,
-      "elapsed_seconds": 13.22,
-      "throughput_per_second": 1.513,
+      "elapsed_seconds": 15.34,
+      "throughput_per_second": 1.304,
       "failures": 0,
       "statuses": {
         "answered": 18,
         "pending_review": 2
       },
       "latency_ms": {
-        "min": 3.15,
-        "mean": 660.94,
-        "p50": 635.94,
-        "p95": 1291.33,
-        "p99": 1396.05,
-        "max": 1396.05
+        "min": 4.0,
+        "mean": 766.88,
+        "p50": 623.0,
+        "p95": 1522.33,
+        "p99": 3230.4,
+        "max": 3230.4
       },
       "node_profile": {
         "execute_task": {
           "calls": 16,
-          "mean_ms": 813.36,
-          "total_ms": 13013.7,
-          "share_of_measured_ms": 0.9953
+          "mean_ms": 942.96,
+          "total_ms": 15087.31,
+          "share_of_measured_ms": 0.9939
         },
         "rag.answer_with_citations": {
           "calls": 16,
-          "mean_ms": 795.98,
-          "total_ms": 12735.6,
-          "share_of_measured_ms": 0.974
+          "mean_ms": 906.21,
+          "total_ms": 14499.4,
+          "share_of_measured_ms": 0.9552
         },
         "rag.retrieve_candidates": {
           "calls": 16,
-          "mean_ms": 15.7,
-          "total_ms": 251.19,
-          "share_of_measured_ms": 0.0192
+          "mean_ms": 35.23,
+          "total_ms": 563.72,
+          "share_of_measured_ms": 0.0371
+        },
+        "gather_evidence": {
+          "calls": 2,
+          "mean_ms": 17.2,
+          "total_ms": 34.4,
+          "share_of_measured_ms": 0.0023
         },
         "case_tools": {
           "calls": 16,
-          "mean_ms": 2.34,
-          "total_ms": 37.42,
-          "share_of_measured_ms": 0.0029
+          "mean_ms": 2.01,
+          "total_ms": 32.12,
+          "share_of_measured_ms": 0.0021
         },
         "finalise_case": {
           "calls": 20,
-          "mean_ms": 0.95,
-          "total_ms": 18.94,
-          "share_of_measured_ms": 0.0014
+          "mean_ms": 1.01,
+          "total_ms": 20.22,
+          "share_of_measured_ms": 0.0013
         },
         "human_review": {
           "calls": 2,
-          "mean_ms": 0.75,
-          "total_ms": 1.51,
+          "mean_ms": 0.83,
+          "total_ms": 1.67,
           "share_of_measured_ms": 0.0001
         },
         "compose_reply": {
           "calls": 16,
-          "mean_ms": 0.09,
-          "total_ms": 1.44,
+          "mean_ms": 0.1,
+          "total_ms": 1.52,
           "share_of_measured_ms": 0.0001
         },
         "triage": {
           "calls": 20,
           "mean_ms": 0.05,
-          "total_ms": 1.04,
-          "share_of_measured_ms": 0.0001
-        },
-        "verify_response": {
-          "calls": 16,
-          "mean_ms": 0.05,
-          "total_ms": 0.8,
+          "total_ms": 1.03,
           "share_of_measured_ms": 0.0001
         },
         "plan_work": {
           "calls": 16,
-          "mean_ms": 0.03,
-          "total_ms": 0.48,
+          "mean_ms": 0.04,
+          "total_ms": 0.7,
+          "share_of_measured_ms": 0.0
+        },
+        "verify_response": {
+          "calls": 16,
+          "mean_ms": 0.04,
+          "total_ms": 0.68,
           "share_of_measured_ms": 0.0
         },
         "rag.select_evidence": {
           "calls": 16,
           "mean_ms": 0.01,
-          "total_ms": 0.22,
+          "total_ms": 0.23,
           "share_of_measured_ms": 0.0
         },
         "intake": {
           "calls": 20,
           "mean_ms": 0.0,
-          "total_ms": 0.01,
+          "total_ms": 0.02,
           "share_of_measured_ms": 0.0
         },
         "rag.prepare_query": {
@@ -113,12 +119,12 @@
   "summary": {
     "bottleneck_node": "execute_task",
     "bottleneck_stage_breakdown": {
-      "rag.answer_with_citations": 0.9806,
-      "rag.retrieve_candidates": 0.0193,
+      "rag.answer_with_citations": 0.9626,
+      "rag.retrieve_candidates": 0.0374,
       "rag.select_evidence": 0.0,
       "rag.prepare_query": 0.0
     },
-    "bottleneck_share_of_measured_time": 0.9953,
+    "bottleneck_share_of_measured_time": 0.9939,
     "p95_growth_at_higher_concurrency": 1.0,
     "throughput_gain_at_higher_concurrency": 1.0,
     "interpretation": "Doubling concurrency multiplied p95 latency by 1.00 while throughput changed by only 1.00x, which is the signature of a single serialised resource rather than of client-side overhead."

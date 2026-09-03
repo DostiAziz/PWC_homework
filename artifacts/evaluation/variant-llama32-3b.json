@@ -12,7 +12,7 @@
     "tasks": 1.0,
     "attribution": 1.0
   },
-  "elapsed_seconds": 11.6,
+  "elapsed_seconds": 11.59,
   "results": [
     {
       "id": "general-services",
@@ -40,7 +40,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 2904.15,
+      "latency_ms": 2834.92,
       "visited_nodes": [
         "intake",
         "triage",
@@ -79,7 +79,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 1381.49,
+      "latency_ms": 1373.57,
       "visited_nodes": [
         "intake",
         "triage",
@@ -118,7 +118,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 1242.31,
+      "latency_ms": 1221.6,
       "visited_nodes": [
         "intake",
         "triage",
@@ -157,7 +157,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 1330.91,
+      "latency_ms": 1324.2,
       "visited_nodes": [
         "intake",
         "triage",
@@ -192,7 +192,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 853.78,
+      "latency_ms": 853.3,
       "visited_nodes": [
         "intake",
         "triage",
@@ -232,7 +232,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 1316.09,
+      "latency_ms": 1325.29,
       "visited_nodes": [
         "intake",
         "triage",
@@ -274,7 +274,7 @@
         "knowledge_query",
         "knowledge_query"
       ],
-      "latency_ms": 3409.55,
+      "latency_ms": 3387.71,
       "visited_nodes": [
         "intake",
         "triage",
@@ -308,10 +308,11 @@
         "confidentiality"
       ],
       "task_kinds": [],
-      "latency_ms": 0.03,
+      "latency_ms": 19.28,
       "visited_nodes": [
         "intake",
-        "triage"
+        "triage",
+        "gather_evidence"
       ],
       "answer": "Thank you. This enquiry needs a PwC specialist, so it is awaiting review."
     },
@@ -335,10 +336,11 @@
         "legal_regulatory"
       ],
       "task_kinds": [],
-      "latency_ms": 0.03,
+      "latency_ms": 16.36,
       "visited_nodes": [
         "intake",
-        "triage"
+        "triage",
+        "gather_evidence"
       ],
       "answer": "Thank you. This enquiry needs a PwC specialist, so it is awaiting review."
     },
@@ -362,10 +364,11 @@
         "complaint_escalation"
       ],
       "task_kinds": [],
-      "latency_ms": 0.02,
+      "latency_ms": 15.22,
       "visited_nodes": [
         "intake",
-        "triage"
+        "triage",
+        "gather_evidence"
       ],
       "answer": "Thank you. This enquiry needs a PwC specialist, so it is awaiting review."
     },
@@ -390,10 +393,11 @@
         "legal_regulatory"
       ],
       "task_kinds": [],
-      "latency_ms": 0.03,
+      "latency_ms": 14.53,
       "visited_nodes": [
         "intake",
-        "triage"
+        "triage",
+        "gather_evidence"
       ],
       "answer": "Thank you. This enquiry needs a PwC specialist, so it is awaiting review."
     },
@@ -417,10 +421,11 @@
         "professional_judgement"
       ],
       "task_kinds": [],
-      "latency_ms": 0.03,
+      "latency_ms": 15.0,
       "visited_nodes": [
         "intake",
-        "triage"
+        "triage",
+        "gather_evidence"
       ],
       "answer": "Thank you. This enquiry needs a PwC specialist, so it is awaiting review."
     },
@@ -525,7 +530,7 @@
       "task_kinds": [
         "knowledge_query"
       ],
-      "latency_ms": 18.26,
+      "latency_ms": 15.21,
       "visited_nodes": [
         "intake",
         "triage",
