@@ -33,7 +33,13 @@ class Database:
                     category TEXT NOT NULL,
                     status TEXT NOT NULL,
                     summary TEXT NOT NULL,
-                    version INTEGER NOT NULL
+                    version INTEGER NOT NULL,
+                    inbound_message_id INTEGER,
+                    reply_recipient TEXT,
+                    delivery_thread_id TEXT,
+                    assigned_reviewer TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS review_requests (
                     review_id TEXT PRIMARY KEY,
@@ -46,7 +52,87 @@ class Database:
                     evidence_json TEXT,
                     checkpoint_id TEXT,
                     response_version INTEGER NOT NULL,
-                    status TEXT NOT NULL
+                    status TEXT NOT NULL,
+                    inbound_message_id INTEGER,
+                    evidence_state TEXT,
+                    routing_provenance_json TEXT,
+                    delivery_recipient TEXT,
+                    delivery_thread_id TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS inbound_messages (
+                    inbound_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    provider_message_id TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    message_json TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    provider_thread_id TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    recipient_id TEXT,
+                    subject TEXT,
+                    body TEXT NOT NULL,
+                    run_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'processing',
+                    claim_token TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    routing_snapshot_json TEXT,
+                    routing_snapshot_hash TEXT,
+                    final_routing_json TEXT,
+                    outcome_json TEXT,
+                    case_id TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    UNIQUE(provider, provider_message_id)
+                );
+                CREATE TABLE IF NOT EXISTS review_decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    expected_version INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    reviewer_id TEXT NOT NULL,
+                    reviewed_text TEXT,
+                    reason TEXT,
+                    content_hash TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(review_id, expected_version)
+                );
+                CREATE TABLE IF NOT EXISTS outbox_messages (
+                    delivery_key TEXT PRIMARY KEY,
+                    case_id TEXT,
+                    review_id TEXT,
+                    response_version INTEGER,
+                    recipient TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    message_kind TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    worker_id TEXT,
+                    lease_expires_at TEXT,
+                    last_error TEXT,
+                    provider_message_id TEXT,
+                    payload_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mailbox_messages (
+                    mailbox_message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    delivery_key TEXT NOT NULL UNIQUE,
+                    conversation_id TEXT,
+                    provider_message_id TEXT,
+                    provider_thread_id TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    recipient_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    message_kind TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS operational_events (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,12 +146,46 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_review_status ON review_requests(status);
                 CREATE INDEX IF NOT EXISTS idx_event_run ON operational_events(run_id, event_id);
+                CREATE INDEX IF NOT EXISTS idx_inbound_lease
+                    ON inbound_messages(status, lease_expires_at);
+                CREATE INDEX IF NOT EXISTS idx_outbox_status
+                    ON outbox_messages(status, lease_expires_at);
+                CREATE INDEX IF NOT EXISTS idx_mailbox_thread
+                    ON mailbox_messages(recipient_id, provider_thread_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_review_case_version
+                    ON review_requests(case_id, response_version);
                 """
             )
             # `CREATE TABLE IF NOT EXISTS` leaves a database made by an earlier version
             # untouched, so columns added later are backfilled explicitly.
             self._add_missing_column(connection, "review_requests", "evidence_json", "TEXT")
             self._add_missing_column(connection, "review_requests", "checkpoint_id", "TEXT")
+            for column in (
+                "inbound_message_id",
+                "reply_recipient",
+                "delivery_thread_id",
+                "assigned_reviewer",
+                "created_at",
+                "updated_at",
+            ):
+                self._add_missing_column(connection, "cases", column, "TEXT")
+            for column in (
+                "inbound_message_id",
+                "evidence_state",
+                "routing_provenance_json",
+                "delivery_recipient",
+                "delivery_thread_id",
+                "created_at",
+                "updated_at",
+            ):
+                self._add_missing_column(connection, "review_requests", column, "TEXT")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_cases_inbound_message
+                ON cases(inbound_message_id)
+                WHERE inbound_message_id IS NOT NULL
+                """
+            )
 
     @staticmethod
     def _add_missing_column(
