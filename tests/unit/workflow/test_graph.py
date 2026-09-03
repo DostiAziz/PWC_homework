@@ -20,8 +20,16 @@ def test_main_graph_exposes_every_named_workflow_node() -> None:
     graph = build_graph().get_graph()
 
     assert {
-        "intake", "triage", "plan_work", "execute_task", "case_tools", "compose_reply",
-        "verify_response", "respond_directly", "human_review", "finalise_case",
+        "intake",
+        "triage",
+        "plan_work",
+        "execute_task",
+        "case_tools",
+        "compose_reply",
+        "verify_response",
+        "respond_directly",
+        "human_review",
+        "finalise_case",
     } <= set(graph.nodes)
 
 
@@ -45,7 +53,10 @@ def test_greeting_is_answered_deterministically_without_retrieval_or_review() ->
     assert result["outcome"]["status"] == "answered"
     assert knowledge_base.requests == []
     assert [event["node"] for event in result["events"]] == [
-        "intake", "triage", "respond_directly", "finalise_case"
+        "intake",
+        "triage",
+        "respond_directly",
+        "finalise_case",
     ]
 
 
@@ -147,13 +158,21 @@ def test_split_questions_only_decomposes_substantive_parts() -> None:
 
 def test_renumbering_gives_merged_answers_one_marker_series() -> None:
     citation = {
-        "source_id": "s", "chunk_id": "c", "marker": "[S1]", "title": "t",
-        "heading": "h", "excerpt": "e", "similarity": 0.5, "canonical_url": None,
+        "source_id": "s",
+        "chunk_id": "c",
+        "marker": "[S1]",
+        "title": "t",
+        "heading": "h",
+        "excerpt": "e",
+        "similarity": 0.5,
+        "canonical_url": None,
     }
-    text, citations = renumber_citations([
-        {"answer": "First. [S1]", "citations": [citation]},
-        {"answer": "Second. [S1]", "citations": [citation]},
-    ])
+    text, citations = renumber_citations(
+        [
+            {"answer": "First. [S1]", "citations": [citation]},
+            {"answer": "Second. [S1]", "citations": [citation]},
+        ]
+    )
 
     assert "[S1]" in text and "[S2]" in text
     assert [item.marker for item in citations] == ["[S1]", "[S2]"]
@@ -194,9 +213,9 @@ def test_normalize_markers_leaves_ordinary_text_alone() -> None:
 
 def test_escalated_enquiry_is_tracked_as_a_case_even_without_planning() -> None:
     store = InMemoryCaseStore()
-    result = build_graph(
-        rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox(store)
-    ).invoke({"message": {"body": "We may have exposed a confidential client document."}})
+    result = build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox(store)).invoke(
+        {"message": {"body": "We may have exposed a confidential client document."}}
+    )
 
     case_id = result["case_id"]
     assert case_id is not None

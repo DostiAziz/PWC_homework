@@ -11,15 +11,11 @@ def test_initialize_creates_async_tables_and_indexes(tmp_path: Path) -> None:
     with database.connect() as connection:
         names = {
             row["name"]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         indexes = {
             row["name"]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
         }
 
     assert {
@@ -54,9 +50,7 @@ def test_initialize_adds_missing_columns_to_legacy_review_table(tmp_path: Path) 
     database.initialize()
 
     with database.connect() as connection:
-        columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(review_requests)")
-        }
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(review_requests)")}
 
     assert {"evidence_json", "routing_provenance_json"} <= columns
 

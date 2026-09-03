@@ -83,6 +83,9 @@ class OllamaSemanticRiskClassifier:
             model=settings.semantic_classifier_model,
             request_timeout_seconds=settings.semantic_classifier_timeout_seconds,
             temperature=0.0,
+            num_ctx=settings.num_ctx,
+            schema_tokens=settings.schema_tokens,
+            max_parallel_generations=settings.max_parallel_generations,
         )
         return cls(cast(StructuredModel, model), settings=settings)
 
@@ -120,9 +123,7 @@ class OllamaSemanticRiskClassifier:
     def _validate(raw_result: object) -> SemanticRiskDecision:
         decision = SemanticRiskDecision.model_validate(raw_result)
         if not decision.categories.issubset(SEMANTIC_CATEGORIES):
-            raise StructuredOutputInvalid(
-                "semantic classifier returned a post-retrieval category"
-            )
+            raise StructuredOutputInvalid("semantic classifier returned a post-retrieval category")
         return decision
 
 

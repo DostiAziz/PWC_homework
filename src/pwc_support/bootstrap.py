@@ -12,12 +12,23 @@ from pwc_support.llm.ollama import OllamaEmbedder, OllamaGenerator
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
-from pwc_support.storage.database import Database
-from pwc_support.storage.repositories import CaseRepository, ReviewRepository, OutboxRepository, MailboxRepository
-from pwc_support.storage.retail_repositories import ProductRepository, OrderRepository, ReturnRepository
-from pwc_support.workflow.retail_tools import build_retail_tools
 from pwc_support.services.review import OutboxDispatcher, ReviewService
+from pwc_support.storage.database import Database
+from pwc_support.storage.repositories import (
+    CaseRepository,
+    MailboxRepository,
+    OutboxRepository,
+    ReviewRepository,
+)
+from pwc_support.storage.retail_repositories import (
+    OrderRepository,
+    ProductRepository,
+    RefundRepository,
+    ReturnRepository,
+)
 from pwc_support.workflow.graph import build_graph
+from pwc_support.workflow.retail_actions import RetailApprovalService
+from pwc_support.workflow.retail_tools import build_retail_tools
 from pwc_support.workflow.risk_classifier import OllamaSemanticRiskClassifier
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 
@@ -36,14 +47,11 @@ class Runtime:
     mailbox: SimulatedMailbox
     knowledge_base: ChromaKnowledgeBase
     review_service: ReviewService
-    dispatcher: OutboxDispatcher
+    mailbox_repository: MailboxRepository
 
 
 def build_runtime(
     settings: Settings | None = None,
-    *,
-    checkpointer: Any = None,
-    enable_interrupt: bool = True,
 ) -> Runtime:
     """Construct the local Ollama, Chroma, SQLite and LangGraph runtime."""
     resolved = (settings or Settings.from_env()).with_retrieval_config(RETRIEVAL_CONFIG)
@@ -56,13 +64,20 @@ def build_runtime(
         top_k=resolved.top_k,
     )
     if knowledge_base.count() == 0:
-        raise RuntimeError(
-            "Chroma knowledge base is empty. Run scripts/ingest_corpus.py first."
-        )
-    generator = OllamaGenerator(ollama_client, resolved.generation_model)
+        raise RuntimeError("Chroma knowledge base is empty. Run scripts/ingest_corpus.py first.")
+    generator = OllamaGenerator.from_connection(
+        host=resolved.ollama_base_url,
+        model=resolved.generation_model,
+        request_timeout_seconds=resolved.request_timeout_seconds,
+        num_ctx=resolved.num_ctx,
+        schema_tokens=resolved.schema_tokens,
+        max_parallel_generations=resolved.max_parallel_generations,
+    )
     database = Database(resolved.operations_db)
     database.initialize()
-    retail_database = Database(resolved.retail_db_path or (resolved.data_dir / "state" / "retail.sqlite3"))
+    retail_database = Database(
+        resolved.retail_db_path or (resolved.data_dir / "state" / "retail.sqlite3")
+    )
     retail_database.initialize()
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
@@ -74,7 +89,12 @@ def build_runtime(
     )
     graph = build_graph(
         risk_classifier=risk_classifier,
-        retail_tools=build_retail_tools(ProductRepository(retail_database), OrderRepository(retail_database), "CUS-1001", ReturnRepository(retail_database, resolved.return_window_days), resolved.refund_auto_approval_limit),
+        retail_tools=build_retail_tools(
+            ProductRepository(retail_database),
+            OrderRepository(retail_database),
+            "CUS-1001",
+            ReturnRepository(retail_database, resolved.return_window_days),
+        ),
         rag_answerer=RagAnswerer(
             knowledge_base,
             generator,
@@ -84,9 +104,13 @@ def build_runtime(
             answer_tokens=resolved.answer_tokens,
         ),
         toolbox=Toolbox(case_tool=CaseTool(cases), mailbox_tool=MailboxTool(mailbox)),
-        enable_interrupt=False,
-        checkpointer=checkpointer,
         max_planned_tasks=resolved.max_planned_tasks,
+    )
+    mailbox_repository = MailboxRepository(database)
+    dispatcher = OutboxDispatcher(OutboxRepository(database), mailbox_repository, cases)
+    retail_approvals = RetailApprovalService(
+        ReturnRepository(retail_database, resolved.return_window_days),
+        RefundRepository(retail_database),
     )
     return Runtime(
         settings=resolved,
@@ -96,6 +120,8 @@ def build_runtime(
         reviews=reviews,
         mailbox=mailbox,
         knowledge_base=knowledge_base,
-        review_service=ReviewService(reviews),
-        dispatcher=OutboxDispatcher(OutboxRepository(database), MailboxRepository(database)),
+        review_service=ReviewService(
+            reviews, dispatcher, retail_approvals, frozenset(resolved.reviewer_ids)
+        ),
+        mailbox_repository=mailbox_repository,
     )

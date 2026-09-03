@@ -1,32 +1,44 @@
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from langgraph.checkpoint.memory import InMemorySaver
-
 from pwc_support.domain.models import (
     Channel,
-    OutcomeStatus,
-    ReviewDecision,
     ReviewDecisionKind,
 )
 from pwc_support.services.client_support import ClientSupportService
+from pwc_support.services.review import OutboxDispatcher, ReviewService
 from pwc_support.storage.database import Database
-from pwc_support.storage.repositories import ReviewRepository
+from pwc_support.storage.repositories import (
+    CaseRepository,
+    MailboxRepository,
+    OutboxRepository,
+    ReviewRepository,
+)
 from pwc_support.workflow.graph import build_graph
+from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 from tests.fakes import InMemoryMailbox, fake_rag_answerer, fake_toolbox
 
 
 def _service(tmp_path: Path, *, mailbox: InMemoryMailbox | None = None) -> ClientSupportService:
     database = Database(tmp_path / "operations.sqlite3")
     database.initialize()
+    cases = CaseRepository(database)
+    reviews = ReviewRepository(database)
+    dispatcher = OutboxDispatcher(OutboxRepository(database), MailboxRepository(database), cases)
     graph = build_graph(
         rag_answerer=fake_rag_answerer(),
-        toolbox=fake_toolbox(mailbox=mailbox),
-        enable_interrupt=True,
-        checkpointer=InMemorySaver(),
+        toolbox=Toolbox(
+            case_tool=CaseTool(cases),
+            mailbox_tool=MailboxTool(mailbox) if mailbox is not None else None,
+        ),
     )
     return ClientSupportService(
-        graph, reviews=ReviewRepository(database), database=database, mailbox=mailbox
+        graph,
+        reviews=reviews,
+        database=database,
+        review_service=ReviewService(
+            reviews, dispatcher, allowed_reviewer_ids=frozenset({"specialist-1"})
+        ),
     )
 
 
@@ -39,55 +51,134 @@ def test_general_question_is_answered_and_its_run_is_observable(tmp_path: Path) 
     assert run.total_duration_ms >= 0.0
 
 
-def test_sensitive_message_pauses_and_persists_a_pending_review(tmp_path: Path) -> None:
+def test_completed_provider_message_is_not_processed_twice_after_restart(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "operations.sqlite3")
+    database.initialize()
+
+    first_service = ClientSupportService(
+        build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox()),
+        database=database,
+    )
+    second_service = ClientSupportService(
+        build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox()),
+        database=database,
+    )
+
+    first = first_service.submit(
+        body="What services does PwC provide?",
+        client_id="client-1",
+        provider_message_id="provider-message-1",
+    )
+    second = second_service.submit(
+        body="What services does PwC provide?",
+        client_id="client-1",
+        provider_message_id="provider-message-1",
+    )
+
+    assert second.outcome == first.outcome
+    assert len(database.list_events(first.outcome.workflow_run_id)) == len(first.events)
+
+
+def test_review_delivery_preserves_email_recipient_thread_and_subject(tmp_path: Path) -> None:
+    database = Database(tmp_path / "operations.sqlite3")
+    database.initialize()
+    cases = CaseRepository(database)
+    reviews = ReviewRepository(database)
+    dispatcher = OutboxDispatcher(OutboxRepository(database), MailboxRepository(database), cases)
+    review_service = ReviewService(
+        reviews, dispatcher, allowed_reviewer_ids=frozenset({"specialist-1"})
+    )
+    graph = build_graph(
+        rag_answerer=fake_rag_answerer(),
+        toolbox=Toolbox(case_tool=CaseTool(cases)),
+    )
+    service = ClientSupportService(
+        graph,
+        reviews=reviews,
+        database=database,
+        review_service=review_service,
+    )
+
+    run = service.submit(
+        body="We have a confidential document exposure.",
+        client_id="alice@example.test",
+        channel=Channel.SIMULATED_EMAIL,
+        conversation_id=uuid4(),
+        thread_id="email-thread-42",
+        subject="Confidentiality concern",
+        provider_message_id="provider-message-2",
+    )
+    review = service.pending_reviews()[0]
+
+    service.decide_review(
+        review_id=review.review_id,
+        decision_id=uuid4(),
+        expected_version=review.response_version,
+        reviewer_id="specialist-1",
+        kind=ReviewDecisionKind.SEND_RESPONSE,
+        reviewed_text="A specialist will contact you shortly.",
+    )
+
+    with database.connect() as connection:
+        message = connection.execute(
+            "SELECT recipient, thread_id, subject FROM outbox_messages WHERE review_id = ?",
+            (str(run.outcome.review_id),),
+        ).fetchone()
+    assert message is not None
+    assert dict(message) == {
+        "recipient": "alice@example.test",
+        "thread_id": "email-thread-42",
+        "subject": "Confidentiality concern",
+    }
+
+
+def test_sensitive_message_queues_and_persists_a_pending_review(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
     run = service.submit(body="We have a confidential document exposure.", client_id="client-1")
 
-    assert run.interrupted is True
     assert run.outcome.status.value == "pending_review"
     pending = service.pending_reviews()
     assert len(pending) == 1
     assert pending[0].review_id == run.outcome.review_id
 
 
-def test_specialist_approval_resumes_the_checkpointed_run(tmp_path: Path) -> None:
+def test_specialist_approval_is_delivered_asynchronously(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    paused = service.submit(body="I want to make a complaint.", client_id="client-1")
-    assert paused.outcome.review_id is not None
+    queued = service.submit(body="I want to make a complaint.", client_id="client-1")
+    assert queued.outcome.review_id is not None
+    review = service.pending_reviews()[0]
 
-    resumed = service.resume(
-        checkpoint_id=paused.checkpoint_id,
-        decision=ReviewDecision(
-            review_id=paused.outcome.review_id,
-            kind=ReviewDecisionKind.EDIT,
-            reviewer_id="specialist-1",
-            response_version=1,
-            edited_text="A complaints specialist will call you today.",
-        ),
+    result = service.decide_review(
+        review_id=review.review_id,
+        decision_id=uuid4(),
+        expected_version=review.response_version,
+        reviewer_id="specialist-1",
+        kind=ReviewDecisionKind.SEND_RESPONSE,
+        reviewed_text="A complaints specialist will call you today.",
     )
 
-    assert resumed.outcome.status.value == "answered"
-    assert resumed.outcome.message == "A complaints specialist will call you today."
+    assert result.case_status.value == "delivery_pending"
     assert service.pending_reviews() == []
 
 
-def test_specialist_rejection_closes_the_run_without_an_answer(tmp_path: Path) -> None:
+def test_specialist_rejection_closes_the_case_without_delivery(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    paused = service.submit(body="Please confirm our regulatory position.", client_id="client-1")
-    assert paused.outcome.review_id is not None
+    queued = service.submit(body="Please confirm our regulatory position.", client_id="client-1")
+    assert queued.outcome.review_id is not None
+    review = service.pending_reviews()[0]
 
-    resumed = service.resume(
-        checkpoint_id=paused.checkpoint_id,
-        decision=ReviewDecision(
-            review_id=paused.outcome.review_id,
-            kind=ReviewDecisionKind.REJECT,
-            reviewer_id="specialist-1",
-            response_version=1,
-        ),
+    result = service.decide_review(
+        review_id=review.review_id,
+        decision_id=uuid4(),
+        expected_version=review.response_version,
+        reviewer_id="specialist-1",
+        kind=ReviewDecisionKind.REJECT,
     )
 
-    assert resumed.outcome.status.value == "unable_to_answer"
+    assert result.case_status.value == "rejected"
 
 
 def test_email_submission_keeps_one_thread_and_delivers_through_the_mailbox(
@@ -123,7 +214,7 @@ def test_node_events_are_persisted_for_every_run(tmp_path: Path) -> None:
 
 
 def test_second_enquiry_does_not_inherit_the_first_run_state(tmp_path: Path) -> None:
-    """One checkpoint namespace per run: otherwise each reply replays the previous trace."""
+    """Each provider message gets an independent workflow run."""
     service = _service(tmp_path)
     conversation = uuid4()
 
@@ -138,46 +229,48 @@ def test_second_enquiry_does_not_inherit_the_first_run_state(tmp_path: Path) -> 
         conversation_id=conversation,
     )
 
-    assert first.checkpoint_id != second.checkpoint_id
+    assert first.outcome.workflow_run_id != second.outcome.workflow_run_id
     assert first.outcome.conversation_id == second.outcome.conversation_id == conversation
     assert second.visited_nodes == first.visited_nodes
     assert len(second.rag_results) == 1
     assert set(second.state["task_results"]) == {"knowledge-1"}
 
 
-def test_paused_run_reports_only_the_nodes_it_actually_reached(tmp_path: Path) -> None:
+def test_review_run_reports_the_complete_async_path(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
     run = service.submit(body="We have a confidential data breach.", client_id="client-1")
 
-    # The run pauses inside human_review, so the trace stops at the evidence gathered
-    # for the specialist. Nothing downstream of the interrupt is reported as visited.
-    assert run.visited_nodes == ["intake", "triage", "gather_evidence"]
+    assert run.visited_nodes == [
+        "intake",
+        "triage",
+        "gather_evidence",
+        "human_review",
+        "finalise_case",
+    ]
 
 
-def test_pending_review_is_resumable_from_a_new_service_instance(tmp_path: Path) -> None:
-    """The reviewer page is stateless: the queue itself carries what resume needs."""
+def test_pending_review_is_decidable_from_a_new_service_instance(tmp_path: Path) -> None:
+    """The reviewer page is stateless: the durable queue carries delivery metadata."""
     service = _service(tmp_path)
-    service.submit(
+    queued_run = service.submit(
         body="Our confidential PwC advisory report may have leaked.", client_id="client-1"
     )
 
     queued = service.pending_reviews()[0]
 
-    assert queued.checkpoint_id is not None
     assert [citation.source_id for citation in queued.evidence] == ["pwc-global-services"]
 
-    resumed = service.resume(
-        checkpoint_id=queued.checkpoint_id,
-        decision=ReviewDecision(
-            review_id=queued.review_id,
-            kind=ReviewDecisionKind.EDIT,
-            reviewer_id="specialist-1",
-            response_version=1,
-            edited_text="A specialist will contact you today.",
-        ),
+    restarted = _service(tmp_path)
+    result = restarted.decide_review(
+        review_id=queued.review_id,
+        decision_id=uuid4(),
+        expected_version=queued.response_version,
+        reviewer_id="specialist-1",
+        kind=ReviewDecisionKind.SEND_RESPONSE,
+        reviewed_text="A specialist will contact you today.",
     )
 
-    assert resumed.outcome.status is OutcomeStatus.ANSWERED
-    assert resumed.outcome.message == "A specialist will contact you today."
-    assert service.pending_reviews() == []
+    assert result.case_status is not None
+    assert queued_run.outcome.review_id == result.review_id
+    assert restarted.pending_reviews() == []

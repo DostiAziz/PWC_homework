@@ -61,15 +61,11 @@ class CorpusChunk(BaseModel):
 
 
 class ChunkContextualizer(Protocol):
-    def contextualize(
-        self, *, document: CorpusDocument, heading: str, chunk: str
-    ) -> str: ...
+    def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str: ...
 
 
 class MetadataContextualizer:
-    def contextualize(
-        self, *, document: CorpusDocument, heading: str, chunk: str
-    ) -> str:
+    def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str:
         return (
             f"This chunk is from {document.title}, section {heading}, "
             f"source version {document.version}."
@@ -141,14 +137,24 @@ def chunk_document(
                 (document.source_id, document.version, heading, str(index), context, original)
             )
             chunk_id = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-            chunks.append(CorpusChunk(
-                chunk_id=chunk_id, source_id=document.source_id, title=document.title,
-                heading=heading, original_text=original, context=context,
-                embedding_text=f"{context}\n\n{original}", token_count=len(window),
-                chunk_index=index, document_version=document.version,
-                document_checksum=checksum, canonical_url=document.url,
-                language=document.language, source_status=document.source_status,
-            ))
+            chunks.append(
+                CorpusChunk(
+                    chunk_id=chunk_id,
+                    source_id=document.source_id,
+                    title=document.title,
+                    heading=heading,
+                    original_text=original,
+                    context=context,
+                    embedding_text=f"{context}\n\n{original}",
+                    token_count=len(window),
+                    chunk_index=index,
+                    document_version=document.version,
+                    document_checksum=checksum,
+                    canonical_url=document.url,
+                    language=document.language,
+                    source_status=document.source_status,
+                )
+            )
             index += 1
             if start + resolved.chunk_size_tokens >= len(words):
                 break

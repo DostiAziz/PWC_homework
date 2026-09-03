@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from pwc_support.config import Settings
 
@@ -16,6 +15,20 @@ def test_defaults_match_local_mac_profile(tmp_path: Path) -> None:
     assert settings.operations_db == tmp_path / "state" / "operations.sqlite3"
 
 
-def test_version_one_rejects_non_english() -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate({"supported_language": "de"})
+def test_environment_wires_runtime_limits_and_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PWC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PWC_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("PWC_NUM_CTX", "4096")
+    monkeypatch.setenv("PWC_SCHEMA_TOKENS", "128")
+    monkeypatch.setenv("PWC_REQUEST_TIMEOUT_SECONDS", "7.5")
+    monkeypatch.setenv("PWC_MAX_PARALLEL_GENERATIONS", "2")
+
+    settings = Settings.from_env()
+
+    assert settings.artifacts_dir == tmp_path / "artifacts"
+    assert settings.num_ctx == 4096
+    assert settings.schema_tokens == 128
+    assert settings.request_timeout_seconds == 7.5
+    assert settings.max_parallel_generations == 2

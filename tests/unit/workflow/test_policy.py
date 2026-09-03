@@ -14,9 +14,7 @@ def test_sensitive_categories_are_routed_to_review() -> None:
 
 
 def test_general_public_service_question_can_be_answered() -> None:
-    decision = ReviewPolicy.default().evaluate(
-        "What services does PwC provide to banks?"
-    )
+    decision = ReviewPolicy.default().evaluate("What services does PwC provide to banks?")
 
     assert decision.requires_review is False
     assert decision.categories == frozenset()
@@ -72,9 +70,7 @@ def test_other_short_follow_up_still_requires_clarification() -> None:
 
 
 def test_policy_records_stable_rule_ids_for_every_matching_category() -> None:
-    decision = ReviewPolicy.default().evaluate(
-        "We had a confidential leak and need legal advice."
-    )
+    decision = ReviewPolicy.default().evaluate("We had a confidential leak and need legal advice.")
 
     assert decision.matched_rule_ids == (
         "confidentiality_confidential",
@@ -92,6 +88,4 @@ def test_post_retrieval_failures_map_to_distinct_review_categories() -> None:
 
     assert insufficient.categories == frozenset({ReviewCategory.INSUFFICIENT_EVIDENCE})
     assert conflicting.categories == frozenset({ReviewCategory.CONFLICTING_EVIDENCE})
-    assert citation_failure.categories == frozenset(
-        {ReviewCategory.CITATION_VERIFICATION_FAILURE}
-    )
+    assert citation_failure.categories == frozenset({ReviewCategory.CITATION_VERIFICATION_FAILURE})

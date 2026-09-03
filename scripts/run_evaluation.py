@@ -10,9 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from langgraph.checkpoint.memory import InMemorySaver
-
 from pwc_support.bootstrap import build_runtime
+from pwc_support.config import Settings
 from pwc_support.services.client_support import ClientSupportService, WorkflowRun
 
 CRITERIA = ("status", "sources", "abstention", "categories", "tasks", "attribution")
@@ -34,9 +33,7 @@ def score_case(case: dict[str, Any], run: WorkflowRun) -> CaseScore:
     cited = sorted({citation.source_id for citation in run.outcome.citations})
     required = sorted(case.get("required_sources", []))
     categories = sorted(run.state.get("triage", {}).get("review_categories", []))
-    task_kinds = sorted(
-        str(task["kind"]) for task in run.state.get("plan", {}).get("tasks", [])
-    )
+    task_kinds = sorted(str(task["kind"]) for task in run.state.get("plan", {}).get("tasks", []))
     expected_kinds = sorted(case.get("expected_task_kinds", []))
     answered = status == "answered" and bool(run.outcome.citations)
     checks = {
@@ -73,7 +70,7 @@ def score_case(case: dict[str, Any], run: WorkflowRun) -> CaseScore:
 
 
 def run(path: Path) -> dict[str, Any]:
-    runtime = build_runtime(checkpointer=InMemorySaver(), enable_interrupt=True)
+    runtime = build_runtime()
     service = ClientSupportService(
         runtime.graph,
         reviews=runtime.reviews,
@@ -97,9 +94,7 @@ def run(path: Path) -> dict[str, Any]:
         )
     elapsed = time.perf_counter() - started
     per_criterion = {
-        criterion: round(
-            sum(score.checks[criterion] for score in scores) / len(scores), 4
-        )
+        criterion: round(sum(score.checks[criterion] for score in scores) / len(scores), 4)
         for criterion in CRITERIA
     }
     return {
@@ -111,18 +106,18 @@ def run(path: Path) -> dict[str, Any]:
         "per_criterion_accuracy": per_criterion,
         "elapsed_seconds": round(elapsed, 2),
         "results": [
-            {"id": score.case_id, "passed": score.passed, "checks": score.checks,
-             **score.detail}
+            {"id": score.case_id, "passed": score.passed, "checks": score.checks, **score.detail}
             for score in scores
         ],
     }
 
 
 def main() -> None:
+    settings = Settings.from_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=Path("eval/final.jsonl"))
     parser.add_argument(
-        "--output", type=Path, default=Path("artifacts/evaluation/final-result.json")
+        "--output", type=Path, default=settings.artifacts_dir / "evaluation" / "final-result.json"
     )
     args = parser.parse_args()
     result = run(args.cases)

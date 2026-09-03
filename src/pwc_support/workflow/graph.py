@@ -8,8 +8,9 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send, interrupt
+from langgraph.types import Send
 
+from pwc_support.domain.errors import RiskClassificationUnavailable
 from pwc_support.domain.models import (
     CaseStatus,
     Citation,
@@ -18,7 +19,6 @@ from pwc_support.domain.models import (
     PlannedTask,
     ProposedAction,
     RagRequest,
-    ReviewDecisionKind,
     Route,
     TaskKind,
     TaskResult,
@@ -29,9 +29,7 @@ from pwc_support.domain.models import (
 from pwc_support.domain.state import SupportState
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.subgraph import to_rag_result
-from pwc_support.workflow.policy import ReviewPolicy
-from pwc_support.workflow.policy import merge_routing
-from pwc_support.domain.errors import RiskClassificationUnavailable
+from pwc_support.workflow.policy import ReviewPolicy, merge_routing
 from pwc_support.workflow.tools import Toolbox, find_case_reference
 
 MARKER = re.compile(r"\[S\d+\]")
@@ -40,10 +38,14 @@ MARKER = re.compile(r"\[S\d+\]")
 # still letting verification catch markers that match no retrieved source.
 LOOKALIKE_BRACKETS = str.maketrans(
     {
-        "\u3010": "[", "\u3011": "]",  # CJK lenticular brackets
-        "\uff3b": "[", "\uff3d": "]",  # fullwidth square brackets
-        "\u3014": "[", "\u3015": "]",  # tortoise shell brackets
-        "\u2768": "[", "\u2769": "]",  # medium parenthesis ornaments
+        "\u3010": "[",
+        "\u3011": "]",  # CJK lenticular brackets
+        "\uff3b": "[",
+        "\uff3d": "]",  # fullwidth square brackets
+        "\u3014": "[",
+        "\u3015": "]",  # tortoise shell brackets
+        "\u2768": "[",
+        "\u2769": "]",  # medium parenthesis ornaments
     }
 )
 
@@ -51,6 +53,7 @@ LOOKALIKE_BRACKETS = str.maketrans(
 def normalize_markers(text: str) -> str:
     """Rewrite lookalike bracket pairs so citation markers are recognisable ASCII."""
     return text.translate(LOOKALIKE_BRACKETS)
+
 
 GREETING_REPLY = (
     "Hello, and welcome to PwC client support. Ask me about publicly described PwC "
@@ -68,10 +71,6 @@ UNSUPPORTED_REPLY = (
 PENDING_REVIEW_REPLY = (
     "Thank you. This enquiry needs a PwC specialist, so I have logged it for review "
     "rather than answering automatically. A specialist will follow up."
-)
-REJECTED_REPLY = (
-    "A PwC specialist has reviewed this enquiry and cannot respond through this channel. "
-    "Please contact your engagement team directly."
 )
 
 
@@ -121,8 +120,6 @@ def build_graph(
     rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
     retail_tools: list[Any] | None = None,
-    enable_interrupt: bool = False,
-    checkpointer: Any = None,
     max_planned_tasks: int = 4,
 ) -> Any:
     """Compile the main support workflow: triage, decomposition, tools, review, delivery."""
@@ -150,8 +147,9 @@ def build_graph(
             "client_id": client_id,
             "channel": channel,
             "draft_version": 1,
-            "events": [_event("intake", "completed", started, channel=channel,
-                              characters=len(body))],
+            "events": [
+                _event("intake", "completed", started, channel=channel, characters=len(body))
+            ],
         }
 
     def triage(state: SupportState) -> dict[str, Any]:
@@ -159,7 +157,10 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
-        retail_lookup = any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer"))
+        retail_lookup = any(
+            word in body.casefold()
+            for word in ("product", "jacket", "backpack", "headphones", "offer", "order")
+        )
         retail_action = any(word in body.casefold() for word in ("return", "refund", "send back"))
         if retail_lookup and not retail_action and not decision.requires_review:
             route = Route.PLAN
@@ -173,7 +174,9 @@ def build_graph(
                 )
                 if requires_review:
                     route = Route.REVIEW
-                    decision = decision.__class__(True, merged_categories, (), decision.policy_version)
+                    decision = decision.__class__(
+                        True, merged_categories, (), decision.policy_version
+                    )
             except RiskClassificationUnavailable as error:
                 failure_class = error.failure_class
                 route = Route.UNSUPPORTED
@@ -185,7 +188,9 @@ def build_graph(
             "semantic": semantic.model_dump(mode="json") if semantic else None,
             "failure_class": failure_class,
         }
-        snapshot_hash = hashlib.sha256(json.dumps(snapshot_payload, sort_keys=True).encode()).hexdigest()
+        snapshot_hash = hashlib.sha256(
+            json.dumps(snapshot_payload, sort_keys=True).encode()
+        ).hexdigest()
         snapshot = {
             "input_fingerprint": hashlib.sha256(body.encode()).hexdigest(),
             "provider_message_id": str(state.get("inbound_message_id") or state["run_id"]),
@@ -208,8 +213,11 @@ def build_graph(
                 "confidence": 0.9 if route is not Route.CLARIFY else 0.4,
             },
             "routing_snapshot": snapshot,
-            "events": [_event("triage", "completed", started, route=route.value,
-                              review_categories=categories)],
+            "events": [
+                _event(
+                    "triage", "completed", started, route=route.value, review_categories=categories
+                )
+            ],
         }
 
     def route_after_triage(
@@ -231,41 +239,102 @@ def build_graph(
         """
         started = time.perf_counter()
         body = str(state["message"]["body"])
-        if retail_tools and any(word in body.casefold() for word in ("return", "refund")) and len(retail_tools) > 3:
+        if (
+            retail_tools
+            and any(word in body.casefold() for word in ("return", "refund"))
+            and len(retail_tools) > 5
+        ):
             order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
             item_match = re.search(r"\bITEM-[A-Z0-9-]+\b", body, re.IGNORECASE)
             if order_match and item_match:
-                action = retail_tools[3].invoke({
-                    "order_id": order_match.group(0).upper(),
-                    "item_id": item_match.group(0).upper(),
-                    "reason": body,
-                    "idempotency_key": f"chat-{state['run_id']}",
-                })
+                action = retail_tools[5].invoke(
+                    {
+                        "order_id": order_match.group(0).upper(),
+                        "item_id": item_match.group(0).upper(),
+                        "reason": body,
+                        "idempotency_key": f"chat-{state['run_id']}",
+                    }
+                )
                 return {
-                    "action_proposal": action,
-                    "events": [_event("gather_evidence", "retail_return_evaluated", started, status=(action.get("return") or {}).get("status"))],
+                    "action_proposal": {**action, "idempotency_key": f"chat-{state['run_id']}"},
+                    "events": [
+                        _event(
+                            "gather_evidence",
+                            "retail_return_evaluated",
+                            started,
+                            eligible=bool((action.get("eligibility") or {}).get("eligible")),
+                        )
+                    ],
                 }
         if rag_answerer is None:
             return {
-                "events": [_event("gather_evidence", "skipped", started,
-                                  reason="no_retrieval_runtime")]
+                "events": [
+                    _event("gather_evidence", "skipped", started, reason="no_retrieval_runtime")
+                ]
             }
         bundle = rag_answerer.gather_evidence(RagRequest(question=body))
         return {
             "evidence": bundle.model_dump(mode="json"),
-            "events": [_event("gather_evidence", "completed", started,
-                              sources=len(bundle.citations))],
+            "events": [
+                _event("gather_evidence", "completed", started, sources=len(bundle.citations))
+            ],
         }
 
     def plan_work(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         body = str(state["message"]["body"])
-        if retail_tools and any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer")):
-            query = next((word for word in ("jacket", "backpack", "headphones", "offer", "product") if word in body.casefold()), body)
+        if (
+            retail_tools
+            and re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
+            and "order" in body.casefold()
+        ):
+            order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
+            assert order_match is not None
+            order_id = order_match.group(0).upper()
+            result = retail_tools[4].invoke(
+                {"order_id": order_id, "customer_id": str(state.get("client_id") or "")}
+            )
+            order = result.get("order") if isinstance(result, dict) else None
+            answer = (
+                f"Order {order_id}: {order['status']}"
+                if order
+                else f"Order {order_id} was not found for this customer."
+            )
+            return {
+                "plan": {"tasks": []},
+                "expected_task_ids": [],
+                "retail_intent": "order_status",
+                "retail_answer": answer,
+                "events": [_event("plan_work", "retail_order_lookup", started, found=bool(order))],
+            }
+        if retail_tools and any(
+            word in body.casefold()
+            for word in ("product", "jacket", "backpack", "headphones", "offer")
+        ):
+            query = next(
+                (
+                    word
+                    for word in ("jacket", "backpack", "headphones", "offer", "product")
+                    if word in body.casefold()
+                ),
+                body,
+            )
             result = retail_tools[0].invoke({"query": query})
             products = result.get("products", []) if isinstance(result, dict) else []
-            answer = "\n".join(f"{item['name']}: {item['price']} {item['currency']} ({item['stock']} in stock)" for item in products) or "No matching products found."
-            return {"plan": {"tasks": []}, "expected_task_ids": [], "retail_intent": "product_search", "retail_answer": answer, "events": [_event("plan_work", "retail_lookup", started, count=len(products))]}
+            answer = (
+                "\n".join(
+                    f"{item['name']}: {item['price']} {item['currency']} ({item['stock']} in stock)"
+                    for item in products
+                )
+                or "No matching products found."
+            )
+            return {
+                "plan": {"tasks": []},
+                "expected_task_ids": [],
+                "retail_intent": "product_search",
+                "retail_answer": answer,
+                "events": [_event("plan_work", "retail_lookup", started, count=len(products))],
+            }
         reference = state["triage"].get("case_reference")
         knowledge_limit = max_planned_tasks - (1 if reference else 0)
         tasks = [
@@ -274,26 +343,28 @@ def build_graph(
                 kind=TaskKind.KNOWLEDGE_QUERY,
                 input=question[:2000],
             )
-            for index, question in enumerate(
-                split_questions(body, limit=knowledge_limit), start=1
-            )
+            for index, question in enumerate(split_questions(body, limit=knowledge_limit), start=1)
         ]
         if reference:
-            tasks.append(
-                PlannedTask(task_id="case-1", kind=TaskKind.CASE_LOOKUP, input=reference)
-            )
+            tasks.append(PlannedTask(task_id="case-1", kind=TaskKind.CASE_LOOKUP, input=reference))
         plan = WorkPlan(tasks=tuple(tasks))
         return {
             "plan": plan.model_dump(mode="json"),
             "expected_task_ids": [task.task_id for task in plan.tasks],
-            "events": [_event("plan_work", "completed", started,
-                              task_ids=[task.task_id for task in plan.tasks],
-                              task_kinds=[task.kind.value for task in plan.tasks])],
+            "events": [
+                _event(
+                    "plan_work",
+                    "completed",
+                    started,
+                    task_ids=[task.task_id for task in plan.tasks],
+                    task_kinds=[task.kind.value for task in plan.tasks],
+                )
+            ],
         }
 
     def fan_out_tasks(state: SupportState) -> list[Send] | str:
         """Dispatch every planned task to an independent worker in one superstep."""
-        if state.get("retail_intent") == "product_search":
+        if state.get("retail_intent") in {"product_search", "order_status"}:
             return "compose_reply"
         return [
             Send(
@@ -335,8 +406,16 @@ def build_graph(
         return {
             "task_results": {task.task_id: result},
             "tool_calls": [call.as_event()],
-            "events": [_event("execute_task", "completed", started, task_id=task.task_id,
-                              kind=task.kind.value, found=lookup.found)],
+            "events": [
+                _event(
+                    "execute_task",
+                    "completed",
+                    started,
+                    task_id=task.task_id,
+                    kind=task.kind.value,
+                    found=lookup.found,
+                )
+            ],
         }
 
     def _execute_knowledge_query(task: PlannedTask, started: float) -> dict[str, Any]:
@@ -348,14 +427,20 @@ def build_graph(
             )
             return {
                 "task_results": {task.task_id: result},
-                "events": [_event("execute_task", "skipped", started, task_id=task.task_id,
-                                  reason="no_retrieval_runtime")],
+                "events": [
+                    _event(
+                        "execute_task",
+                        "skipped",
+                        started,
+                        task_id=task.task_id,
+                        reason="no_retrieval_runtime",
+                    )
+                ],
             }
         rag_state = rag_answerer.run(RagRequest(question=task.input))
         rag_result = to_rag_result(rag_state)
         timings = {
-            f"rag.{node}": value
-            for node, value in rag_state.get("node_timings", {}).items()
+            f"rag.{node}": value for node, value in rag_state.get("node_timings", {}).items()
         }
         payload = rag_result.model_dump(mode="json")
         payload["task_id"] = task.task_id
@@ -370,29 +455,39 @@ def build_graph(
         return {
             "task_results": {task.task_id: result},
             "rag_results": [payload],
-            "events": [_event("execute_task", "completed", started, task_id=task.task_id,
-                              kind=task.kind.value, status=rag_result.status,
-                              citations=len(rag_result.citations), **timings)],
+            "events": [
+                _event(
+                    "execute_task",
+                    "completed",
+                    started,
+                    task_id=task.task_id,
+                    kind=task.kind.value,
+                    status=rag_result.status,
+                    citations=len(rag_result.citations),
+                    **timings,
+                )
+            ],
         }
 
     def case_tools(state: SupportState) -> dict[str, Any]:
         """Join the fan-out and record the enquiry in the durable case system."""
         started = time.perf_counter()
         if tools.case_tool is None:
-            return {"events": [_event("case_tools", "skipped", started,
-                                      reason="no_case_tool")]}
+            return {"events": [_event("case_tools", "skipped", started, reason="no_case_tool")]}
         existing = _resolved_case_id(state)
         if existing is not None:
             return {
                 "case_id": existing,
-                "events": [_event("case_tools", "completed", started, case_id=existing,
-                                  operation="reused")],
+                "events": [
+                    _event("case_tools", "completed", started, case_id=existing, operation="reused")
+                ],
             }
         categories = state["triage"].get("review_categories") or []
         if not categories and not state["triage"].get("case_reference"):
             return {
-                "events": [_event("case_tools", "skipped", started,
-                                  reason="routine_enquiry_no_case")]
+                "events": [
+                    _event("case_tools", "skipped", started, reason="routine_enquiry_no_case")
+                ]
             }
         record, call = tools.case_tool.open_case(
             conversation_id=UUID(state["conversation_id"]),
@@ -410,8 +505,11 @@ def build_graph(
                     requires_review=False,
                 ).model_dump(mode="json")
             ],
-            "events": [_event("case_tools", "completed", started, case_id=record.case_id,
-                              operation="opened")],
+            "events": [
+                _event(
+                    "case_tools", "completed", started, case_id=record.case_id, operation="opened"
+                )
+            ],
         }
 
     def _resolved_case_id(state: SupportState) -> str | None:
@@ -425,22 +523,32 @@ def build_graph(
 
     def compose_reply(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
-        if state.get("retail_intent") == "product_search":
+        if state.get("retail_intent") in {"product_search", "order_status"}:
             return {
-                "draft": {"text": str(state.get("retail_answer", "No matching products found.")), "citation_markers": [], "citations": [], "response_version": 1, "source": "system"},
+                "draft": {
+                    "text": str(state.get("retail_answer", "No matching products found.")),
+                    "citation_markers": [],
+                    "citations": [],
+                    "response_version": 1,
+                    "source": "system",
+                },
                 "events": [_event("compose_reply", "retail", started)],
             }
         answered = [
-            result
-            for result in state.get("rag_results", [])
-            if result.get("status") == "answered"
+            result for result in state.get("rag_results", []) if result.get("status") == "answered"
         ]
         text, citations = renumber_citations(answered)
         if not text:
             return {
                 "draft": {"text": "", "citation_markers": [], "response_version": 1},
-                "events": [_event("compose_reply", "insufficient_evidence", started,
-                                  knowledge_results=len(state.get("rag_results", [])))],
+                "events": [
+                    _event(
+                        "compose_reply",
+                        "insufficient_evidence",
+                        started,
+                        knowledge_results=len(state.get("rag_results", [])),
+                    )
+                ],
             }
         draft = DraftReply(
             text=text[:1500],
@@ -452,8 +560,15 @@ def build_graph(
                 **draft.model_dump(mode="json"),
                 "citations": [citation.model_dump(mode="json") for citation in citations],
             },
-            "events": [_event("compose_reply", "completed", started,
-                              citations=len(citations), characters=len(draft.text))],
+            "events": [
+                _event(
+                    "compose_reply",
+                    "completed",
+                    started,
+                    citations=len(citations),
+                    characters=len(draft.text),
+                )
+            ],
         }
 
     def verify_response(state: SupportState) -> dict[str, Any]:
@@ -462,9 +577,14 @@ def build_graph(
         draft = state.get("draft", {})
         text = str(draft.get("text", ""))
         citations = draft.get("citations", [])
-        if state.get("retail_intent") == "product_search":
-            verification = Verification(route="release", reason="Structured product facts supplied by database tool")
-            return {"verification": verification.model_dump(mode="json"), "events": [_event("verify_response", "release", started, citations=0)]}
+        if state.get("retail_intent") in {"product_search", "order_status"}:
+            verification = Verification(
+                route="release", reason="Structured product facts supplied by database tool"
+            )
+            return {
+                "verification": verification.model_dump(mode="json"),
+                "events": [_event("verify_response", "release", started, citations=0)],
+            }
         known = {str(citation["marker"]) for citation in citations}
         invented = sorted(set(MARKER.findall(text)) - known)
         if not text or not citations:
@@ -492,9 +612,15 @@ def build_graph(
             )
         return {
             "verification": verification.model_dump(mode="json"),
-            "events": [_event("verify_response", verification.route, started,
-                              error_code=verification.error_code,
-                              citations=len(citations))],
+            "events": [
+                _event(
+                    "verify_response",
+                    verification.route,
+                    started,
+                    error_code=verification.error_code,
+                    citations=len(citations),
+                )
+            ],
         }
 
     def _needs_specialist(state: SupportState) -> bool:
@@ -524,8 +650,13 @@ def build_graph(
         else:
             message, status = UNSUPPORTED_REPLY, OutcomeStatus.UNABLE_TO_ANSWER
         return {
-            "draft": {"text": message, "citation_markers": [], "citations": [],
-                      "response_version": 1, "source": "system"},
+            "draft": {
+                "text": message,
+                "citation_markers": [],
+                "citations": [],
+                "response_version": 1,
+                "source": "system",
+            },
             "outcome": {"status": status.value},
             "events": [_event("respond_directly", status.value, started, route=route)],
         }
@@ -544,30 +675,45 @@ def build_graph(
             "categories": state["triage"].get("review_categories", []),
             "original_message": state["message"]["body"],
             "proposed_reply": state.get("draft", {}),
-            "proposed_actions": state.get("proposed_actions", []) + ([{"action_type": "retail_return", "description": "Return eligibility and refund proposal", "requires_review": True, "details": state["action_proposal"]}] if state.get("action_proposal") else []),
+            "proposed_actions": state.get("proposed_actions", [])
+            + (
+                [
+                    {
+                        "action_type": "retail_return",
+                        "description": "Return eligibility and refund proposal",
+                        "requires_review": True,
+                        "details": state["action_proposal"],
+                    }
+                ]
+                if state.get("action_proposal")
+                else []
+            ),
             # Only the triage path carries background evidence; an enquiry escalated
             # after drafting arrives with a draft that already cites its own sources.
             "evidence": state.get("evidence", {}).get("citations", []),
+            "evidence_state": (
+                "selected" if state.get("evidence", {}).get("citations") else "unavailable"
+            ),
+            "routing_provenance": state.get("routing_snapshot"),
+            "delivery_recipient": state.get("client_id"),
+            "delivery_thread_id": state.get("thread_id"),
+            "delivery_subject": state.get("message", {}).get("subject") or "Re: your enquiry",
             "verification": state.get("verification", {}),
             "response_version": int(state.get("draft_version", 1)),
         }
-        if not enable_interrupt:
-            return {
-                "review_request": request,
-                "case_id": case_id,
-                "tool_calls": opened,
-                "draft": {"text": PENDING_REVIEW_REPLY, "citations": [],
-                          "citation_markers": [], "response_version": 1, "source": "system"},
-                "outcome": {"status": OutcomeStatus.PENDING_REVIEW.value,
-                            "review_id": review_id},
-                "events": [_event("human_review", "pending", started, review_id=review_id)],
-            }
-        decision = interrupt({"type": "human_review_required", **request})
         return {
             "review_request": request,
             "case_id": case_id,
             "tool_calls": opened,
-            **_apply_review_decision(state, review_id, decision, started),
+            "draft": {
+                "text": PENDING_REVIEW_REPLY,
+                "citations": [],
+                "citation_markers": [],
+                "response_version": 1,
+                "source": "system",
+            },
+            "outcome": {"status": OutcomeStatus.PENDING_REVIEW.value, "review_id": review_id},
+            "events": [_event("human_review", "pending", started, review_id=review_id)],
         }
 
     def _ensure_case(state: SupportState) -> tuple[str | None, list[dict[str, Any]]]:
@@ -583,51 +729,11 @@ def build_graph(
         )
         return record.case_id, [call.as_event()]
 
-    def _apply_review_decision(
-        state: SupportState, review_id: str, decision: Any, started: float
-    ) -> dict[str, Any]:
-        payload = decision if isinstance(decision, dict) else {"kind": str(decision)}
-        raw_kind = str(payload.get("kind") or payload.get("decision") or "approve")
-        try:
-            kind = ReviewDecisionKind(raw_kind)
-        except ValueError:
-            kind = ReviewDecisionKind.APPROVE
-        proposed = str(state.get("draft", {}).get("text", "")).strip()
-        edited = str(payload.get("edited_text") or payload.get("reply") or "").strip()
-        if kind is ReviewDecisionKind.REJECT:
-            message, status = REJECTED_REPLY, OutcomeStatus.UNABLE_TO_ANSWER
-        elif kind in (ReviewDecisionKind.TAKE_OWNERSHIP, ReviewDecisionKind.REQUEST_REVISION):
-            # No redraft loop exists, so asking for a revision leaves the enquiry with the
-            # specialist. It must never fall through to approving the draft it rejected.
-            message = edited or PENDING_REVIEW_REPLY
-            status = OutcomeStatus.PENDING_REVIEW
-        elif kind is ReviewDecisionKind.EDIT:
-            message, status = edited or proposed, OutcomeStatus.ANSWERED
-        else:
-            message, status = edited or proposed, OutcomeStatus.ANSWERED
-        if not message:
-            message, status = PENDING_REVIEW_REPLY, OutcomeStatus.PENDING_REVIEW
-        return {
-            "review_decision": {
-                "review_id": review_id,
-                "kind": kind.value,
-                "reviewer_id": str(payload.get("reviewer_id", "specialist")),
-                "note": str(payload.get("note", "")),
-            },
-            "draft": {"text": message, "citations": state.get("draft", {}).get("citations", []),
-                      "citation_markers": [], "response_version": 1, "source": "human"},
-            "outcome": {"status": status.value, "review_id": review_id},
-            "events": [_event("human_review", "resumed", started, review_id=review_id,
-                              kind=kind.value)],
-        }
-
     def finalise_case(state: SupportState) -> dict[str, Any]:
         """Close the case and deliver the reply through the channel's own tool."""
         started = time.perf_counter()
         message = str(state.get("draft", {}).get("text", "")) or UNSUPPORTED_REPLY
-        status = OutcomeStatus(
-            state.get("outcome", {}).get("status", OutcomeStatus.ANSWERED.value)
-        )
+        status = OutcomeStatus(state.get("outcome", {}).get("status", OutcomeStatus.ANSWERED.value))
         calls: list[dict[str, Any]] = []
         case_id = state.get("case_id")
         if tools.case_tool is not None and case_id:
@@ -648,11 +754,13 @@ def build_graph(
                 "thread_id": state.get("thread_id"),
                 "citations": state.get("draft", {}).get("citations", []),
             },
-            "outcome": {**state.get("outcome", {}), "status": status.value,
-                        "case_id": case_id},
+            "outcome": {**state.get("outcome", {}), "status": status.value, "case_id": case_id},
             "tool_calls": calls,
-            "events": [_event("finalise_case", status.value, started, case_id=case_id,
-                              delivered=bool(calls))],
+            "events": [
+                _event(
+                    "finalise_case", status.value, started, case_id=case_id, delivered=bool(calls)
+                )
+            ],
         }
 
     def _case_status(status: OutcomeStatus) -> CaseStatus:
@@ -695,4 +803,4 @@ def build_graph(
     builder.add_edge("respond_directly", "finalise_case")
     builder.add_edge("human_review", "finalise_case")
     builder.add_edge("finalise_case", END)
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile()

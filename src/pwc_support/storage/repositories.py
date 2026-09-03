@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from pwc_support.domain.models import (
     CaseRequest,
     CaseStatus,
     Citation,
+    ClientOutcome,
     DeliveryReceipt,
     DraftReply,
     InboundClaim,
@@ -104,9 +106,10 @@ class ReviewRepository:
                 """
                 INSERT OR IGNORE INTO review_requests
                 (review_id, case_id, run_id, categories_json, original_message,
-                 proposed_reply_json, proposed_actions_json, evidence_json, checkpoint_id,
-                 response_version, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 proposed_reply_json, proposed_actions_json, evidence_json,
+                 response_version, status, evidence_state, routing_provenance_json,
+                 delivery_recipient, delivery_thread_id, delivery_subject)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(review.review_id),
@@ -117,9 +120,15 @@ class ReviewRepository:
                     review.proposed_reply.model_dump_json() if review.proposed_reply else None,
                     json_object([action.model_dump() for action in review.proposed_actions]),
                     json_object([citation.model_dump(mode="json") for citation in review.evidence]),
-                    review.checkpoint_id,
                     review.response_version,
                     review.status,
+                    review.evidence_state,
+                    review.routing_provenance.model_dump_json()
+                    if review.routing_provenance
+                    else None,
+                    review.delivery_recipient,
+                    review.delivery_thread_id,
+                    review.delivery_subject,
                 ),
             )
 
@@ -136,13 +145,6 @@ class ReviewRepository:
                 "SELECT * FROM review_requests WHERE review_id = ?", (str(review_id),)
             ).fetchone()
         return None if row is None else self._from_row(row)
-
-    def mark_decided(self, review_id: UUID) -> None:
-        with self.database.connect() as connection:
-            connection.execute(
-                "UPDATE review_requests SET status = 'decided' WHERE review_id = ?",
-                (str(review_id),),
-            )
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> ReviewRequest:
@@ -164,9 +166,17 @@ class ReviewRepository:
             evidence=tuple(
                 Citation.model_validate(item) for item in json.loads(evidence_json or "[]")
             ),
-            checkpoint_id=row["checkpoint_id"],
             response_version=row["response_version"],
             status=row["status"],
+            evidence_state=row["evidence_state"] or "selected",
+            routing_provenance=(
+                RoutingSnapshot.model_validate_json(row["routing_provenance_json"])
+                if row["routing_provenance_json"]
+                else None
+            ),
+            delivery_recipient=row["delivery_recipient"],
+            delivery_thread_id=row["delivery_thread_id"],
+            delivery_subject=row["delivery_subject"],
         )
 
     def decide(
@@ -195,7 +205,16 @@ class ReviewRepository:
                     decision_id=UUID(existing["decision_id"]),
                     review_id=review_id,
                     kind=ReviewDecisionKind(existing["kind"]),
-                    case_status=CaseStatus.RESOLVED,
+                    case_status=CaseStatus.DELIVERY_PENDING
+                    if existing["kind"]
+                    in {
+                        ReviewDecisionKind.SEND_RESPONSE.value,
+                        ReviewDecisionKind.APPROVE.value,
+                        ReviewDecisionKind.APPROVE_REFUND.value,
+                        ReviewDecisionKind.APPROVE_RETURN.value,
+                        ReviewDecisionKind.OFFER_REPLACEMENT.value,
+                    }
+                    else CaseStatus.REJECTED,
                     outbox_key=f"case:{row['case_id']}:response:{expected_version}",
                     replayed=True,
                 )
@@ -205,25 +224,31 @@ class ReviewRepository:
                 )
             now = datetime.now(UTC).isoformat()
             outbox_key = None
-            case_status = (
-                CaseStatus.RESOLVED
-                if kind in (ReviewDecisionKind.SEND_RESPONSE, ReviewDecisionKind.APPROVE)
-                else CaseStatus.REJECTED
+            approving = kind in (
+                ReviewDecisionKind.SEND_RESPONSE,
+                ReviewDecisionKind.APPROVE,
+                ReviewDecisionKind.APPROVE_REFUND,
+                ReviewDecisionKind.APPROVE_RETURN,
+                ReviewDecisionKind.OFFER_REPLACEMENT,
             )
-            if kind in (ReviewDecisionKind.SEND_RESPONSE, ReviewDecisionKind.APPROVE):
+            case_status = CaseStatus.DELIVERY_PENDING if approving else CaseStatus.REJECTED
+            if approving:
                 outbox_key = f"case:{row['case_id']}:response:{expected_version}"
                 body = reviewed_text or "Your request has been reviewed by our support team."
-                payload_hash = str(hash(body))
+                payload_hash = hashlib.sha256(body.encode()).hexdigest()
                 connection.execute(
-                    "INSERT OR IGNORE INTO outbox_messages (delivery_key,case_id,review_id,response_version,recipient,thread_id,subject,body,message_kind,payload_hash,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO outbox_messages ("
+                    "delivery_key,case_id,review_id,response_version,recipient,thread_id,"
+                    "subject,body,message_kind,payload_hash,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         outbox_key,
                         row["case_id"],
                         str(review_id),
                         expected_version,
-                        "client@example.test",
-                        f"case:{row['case_id']}",
-                        "Support response",
+                        row["delivery_recipient"] or "client@example.test",
+                        row["delivery_thread_id"] or f"case:{row['case_id']}",
+                        row["delivery_subject"] or "Support response",
                         body,
                         MessageKind.REVIEWED_RESPONSE.value,
                         payload_hash,
@@ -232,7 +257,9 @@ class ReviewRepository:
                     ),
                 )
             connection.execute(
-                "INSERT INTO review_decisions (decision_id,review_id,expected_version,kind,reviewer_id,reviewed_text,reason,content_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO review_decisions ("
+                "decision_id,review_id,expected_version,kind,reviewer_id,reviewed_text,"
+                "reason,content_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     str(decision_id),
                     str(review_id),
@@ -241,12 +268,13 @@ class ReviewRepository:
                     reviewer_id,
                     reviewed_text,
                     reason,
-                    str(hash(reviewed_text or "")),
+                    hashlib.sha256((reviewed_text or "").encode()).hexdigest(),
                     now,
                 ),
             )
             connection.execute(
-                "UPDATE review_requests SET status='decided', updated_at=? WHERE review_id=? AND status='pending'",
+                "UPDATE review_requests SET status='decided', updated_at=? "
+                "WHERE review_id=? AND status='pending'",
                 (now, str(review_id)),
             )
             connection.execute(
@@ -288,7 +316,11 @@ class InboundRepository:
                 token = str(uuid4())
                 expiry = now + timedelta(seconds=lease_seconds)
                 c.execute(
-                    "INSERT INTO inbound_messages (provider,provider_message_id,payload_hash,message_json,conversation_id,provider_thread_id,sender_id,body,status,claim_token,lease_owner,lease_expires_at,attempt_count,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO inbound_messages ("
+                    "provider,provider_message_id,payload_hash,message_json,conversation_id,"
+                    "provider_thread_id,sender_id,body,status,claim_token,lease_owner,"
+                    "lease_expires_at,attempt_count,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         provider,
                         provider_message_id,
@@ -322,14 +354,23 @@ class InboundRepository:
                     ErrorCode.IDEMPOTENCY_CONFLICT, "payload hash conflicts with existing message"
                 )
             if row["status"] == "completed":
-                return InboundClaimResult(status="completed")
+                return InboundClaimResult(
+                    status="completed",
+                    outcome=(
+                        ClientOutcome.model_validate_json(row["outcome_json"])
+                        if row["outcome_json"]
+                        else None
+                    ),
+                )
             existing_expiry = _dt(row["lease_expires_at"])
             if existing_expiry and existing_expiry > now:
                 return InboundClaimResult(status="in_progress")
             token = str(uuid4())
             new_expiry = now + timedelta(seconds=lease_seconds)
             c.execute(
-                "UPDATE inbound_messages SET claim_token=?, lease_owner=?, lease_expires_at=?, attempt_count=attempt_count+1, status='processing' WHERE inbound_id=?",
+                "UPDATE inbound_messages SET claim_token=?, lease_owner=?, "
+                "lease_expires_at=?, attempt_count=attempt_count+1, status='processing' "
+                "WHERE inbound_id=?",
                 (token, token, new_expiry.isoformat(), row["inbound_id"]),
             )
             return InboundClaimResult(
@@ -357,7 +398,8 @@ class InboundRepository:
             if row["routing_snapshot_json"]:
                 return RoutingSnapshot.model_validate_json(row["routing_snapshot_json"])
             c.execute(
-                "UPDATE inbound_messages SET routing_snapshot_json=?, routing_snapshot_hash=? WHERE inbound_id=? AND claim_token=?",
+                "UPDATE inbound_messages SET routing_snapshot_json=?, "
+                "routing_snapshot_hash=? WHERE inbound_id=? AND claim_token=?",
                 (
                     snapshot.model_dump_json(),
                     snapshot.snapshot_hash,
@@ -367,30 +409,22 @@ class InboundRepository:
             )
             return snapshot
 
-    def renew(self, claim: InboundClaim, *, lease_seconds: int, now: datetime) -> InboundClaim:
-        with self.database.connect() as c:
-            expiry = now + timedelta(seconds=lease_seconds)
-            updated = c.execute(
-                "UPDATE inbound_messages SET lease_expires_at=? WHERE provider=? AND provider_message_id=? AND claim_token=?",
-                (expiry.isoformat(), claim.provider, claim.provider_message_id, claim.claim_token),
-            ).rowcount
-            if not updated:
-                raise SupportError(ErrorCode.STALE_INBOUND_CLAIM, "inbound claim is stale")
-        return claim.model_copy(update={"lease_expires_at": expiry})
-
     def complete(self, claim: InboundClaim, outcome: object) -> None:
         with self.database.connect() as c:
             updated = c.execute(
-                "UPDATE inbound_messages SET status='completed', outcome_json=?, completed_at=?, lease_expires_at=NULL WHERE provider=? AND provider_message_id=? AND claim_token=?",
-                (json.dumps(outcome, default=str), datetime.now(UTC).isoformat(), claim.provider, claim.provider_message_id, claim.claim_token),
+                "UPDATE inbound_messages SET status='completed', outcome_json=?, "
+                "completed_at=?, lease_expires_at=NULL WHERE provider=? "
+                "AND provider_message_id=? AND claim_token=?",
+                (
+                    json.dumps(outcome, default=str),
+                    datetime.now(UTC).isoformat(),
+                    claim.provider,
+                    claim.provider_message_id,
+                    claim.claim_token,
+                ),
             ).rowcount
             if not updated:
                 raise SupportError(ErrorCode.STALE_INBOUND_CLAIM, "inbound claim is stale")
-
-    def completed_outcome(self, provider: str, provider_message_id: str) -> dict[str, object] | None:
-        with self.database.connect() as c:
-            row = c.execute("SELECT outcome_json FROM inbound_messages WHERE provider=? AND provider_message_id=? AND status='completed'", (provider, provider_message_id)).fetchone()
-        return json.loads(row["outcome_json"]) if row and row["outcome_json"] else None
 
 
 class OutboxRepository:
@@ -407,7 +441,9 @@ class OutboxRepository:
                 raise SupportError(ErrorCode.IDEMPOTENCY_CONFLICT, "delivery key payload conflict")
             now = datetime.now(UTC).isoformat()
             c.execute(
-                "INSERT OR IGNORE INTO outbox_messages (delivery_key,case_id,response_version,recipient,thread_id,subject,body,message_kind,payload_hash,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO outbox_messages ("
+                "delivery_key,case_id,response_version,recipient,thread_id,subject,body,"
+                "message_kind,payload_hash,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     message.delivery_key,
                     message.case_id,
@@ -433,7 +469,8 @@ class OutboxRepository:
             if not row:
                 return None
             c.execute(
-                "UPDATE outbox_messages SET status='processing',worker_id=?,lease_expires_at=?,attempt_count=attempt_count+1 WHERE delivery_key=?",
+                "UPDATE outbox_messages SET status='processing', worker_id=?, "
+                "lease_expires_at=?, attempt_count=attempt_count+1 WHERE delivery_key=?",
                 (
                     worker_id,
                     (now + timedelta(seconds=lease_seconds)).isoformat(),
@@ -454,15 +491,19 @@ class OutboxRepository:
 
     def mark_sent(self, delivery_key: str, receipt: DeliveryReceipt) -> None:
         with self.database.connect() as c:
-            c.execute("UPDATE outbox_messages SET status='sent', provider_message_id=?, updated_at=? WHERE delivery_key=?", (receipt.provider_message_id, receipt.delivered_at.isoformat(), delivery_key))
+            c.execute(
+                "UPDATE outbox_messages SET status='sent', provider_message_id=?, "
+                "updated_at=? WHERE delivery_key=?",
+                (receipt.provider_message_id, receipt.delivered_at.isoformat(), delivery_key),
+            )
 
     def mark_failed(self, delivery_key: str, error: str) -> None:
         with self.database.connect() as c:
-            c.execute("UPDATE outbox_messages SET status='failed', last_error=?, updated_at=? WHERE delivery_key=?", (error, datetime.now(UTC).isoformat(), delivery_key))
-
-    def retry(self, delivery_key: str) -> None:
-        with self.database.connect() as c:
-            c.execute("UPDATE outbox_messages SET status='pending', updated_at=? WHERE delivery_key=? AND status IN ('failed','processing')", (datetime.now(UTC).isoformat(), delivery_key))
+            c.execute(
+                "UPDATE outbox_messages SET status='failed', last_error=?, "
+                "updated_at=? WHERE delivery_key=?",
+                (error, datetime.now(UTC).isoformat(), delivery_key),
+            )
 
 
 class MailboxRepository:
@@ -488,7 +529,9 @@ class MailboxRepository:
             now = datetime.now(UTC)
             provider_id = f"mail-{uuid4()}"
             c.execute(
-                "INSERT INTO mailbox_messages (delivery_key,provider_message_id,provider_thread_id,sender_id,recipient_id,subject,body,message_kind,payload_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO mailbox_messages ("
+                "delivery_key,provider_message_id,provider_thread_id,sender_id,recipient_id,"
+                "subject,body,message_kind,payload_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     message.delivery_key,
                     provider_id,
@@ -506,7 +549,19 @@ class MailboxRepository:
                 delivery_key=message.delivery_key, provider_message_id=provider_id, delivered_at=now
             )
 
-    def list_messages(self, *, recipient: str, thread_id: str) -> list[dict[str, object]]:
+    def list_messages(
+        self, *, recipient: str, thread_id: str | None = None
+    ) -> list[dict[str, object]]:
         with self.database.connect() as c:
-            rows = c.execute("SELECT * FROM mailbox_messages WHERE recipient_id=? AND provider_thread_id=? ORDER BY created_at", (recipient, thread_id)).fetchall()
+            if thread_id is None:
+                rows = c.execute(
+                    "SELECT * FROM mailbox_messages WHERE recipient_id=? ORDER BY created_at",
+                    (recipient,),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM mailbox_messages WHERE recipient_id=? "
+                    "AND provider_thread_id=? ORDER BY created_at",
+                    (recipient, thread_id),
+                ).fetchall()
         return [dict(row) for row in rows]

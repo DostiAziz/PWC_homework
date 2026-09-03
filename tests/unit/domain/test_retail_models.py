@@ -79,7 +79,9 @@ def test_order_summary_accepts_items_and_delivery_timestamp() -> None:
         ),
     ],
 )
-def test_retail_models_reject_negative_money(model: type[object], payload: dict[str, object]) -> None:
+def test_retail_models_reject_negative_money(
+    model: type[object], payload: dict[str, object]
+) -> None:
     with pytest.raises(ValidationError):
         model(**payload)
 
@@ -139,6 +141,4 @@ def test_settings_expose_retail_policy_configuration(tmp_path: object) -> None:
 def test_support_state_declares_retail_workflow_slices() -> None:
     annotations = SupportState.__annotations__
 
-    assert {"retail_intent", "tool_results", "action_proposal", "action_risk", "return_id"} <= set(
-        annotations
-    )
+    assert {"retail_intent", "retail_answer", "action_proposal"} <= set(annotations)

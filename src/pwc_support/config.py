@@ -19,7 +19,6 @@ class Settings(BaseModel):
     chroma_host: str = "127.0.0.1"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
     collection_name: str = "pwc_support_v2_nomic_768_cosine"
-    supported_language: Literal["en"] = "en"
     num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
     schema_tokens: int = Field(default=256, ge=64, le=512)
@@ -43,14 +42,11 @@ class Settings(BaseModel):
     retail_db_path: Path | None = None
     refund_auto_approval_limit: Decimal = Field(default=Decimal("100.00"), ge=0)
     return_window_days: int = Field(default=30, ge=1, le=365)
+    reviewer_ids: tuple[str, ...] = ("specialist-1",)
 
     @property
     def operations_db(self) -> Path:
         return self.data_dir / "state" / "operations.sqlite3"
-
-    @property
-    def checkpoints_db(self) -> Path:
-        return self.data_dir / "state" / "checkpoints.sqlite3"
 
     @property
     def chroma_path(self) -> Path:
@@ -88,6 +84,7 @@ class Settings(BaseModel):
     def from_env(cls) -> Settings:
         return cls(
             data_dir=Path(os.getenv("PWC_DATA_DIR", "data")),
+            artifacts_dir=Path(os.getenv("PWC_ARTIFACTS_DIR", "artifacts")),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             chroma_mode=cast(Literal["persistent", "http"], os.getenv("CHROMA_MODE", "persistent")),
             chroma_host=os.getenv("CHROMA_HOST", "127.0.0.1"),
@@ -97,4 +94,13 @@ class Settings(BaseModel):
             generation_model=os.getenv("PWC_GENERATION_MODEL", "gpt-oss:20b"),
             embedding_model=os.getenv("PWC_EMBEDDING_MODEL", "nomic-embed-text"),
             answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
+            num_ctx=int(os.getenv("PWC_NUM_CTX", "8192")),
+            schema_tokens=int(os.getenv("PWC_SCHEMA_TOKENS", "256")),
+            request_timeout_seconds=float(os.getenv("PWC_REQUEST_TIMEOUT_SECONDS", "120")),
+            max_parallel_generations=int(os.getenv("PWC_MAX_PARALLEL_GENERATIONS", "1")),
+            reviewer_ids=tuple(
+                item.strip()
+                for item in os.getenv("PWC_REVIEWER_IDS", "specialist-1").split(",")
+                if item.strip()
+            ),
         )

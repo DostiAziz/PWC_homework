@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from pwc_support.bootstrap import build_runtime
+from pwc_support.config import Settings
 from pwc_support.services.client_support import ClientSupportService
 
 
@@ -93,11 +94,10 @@ def run_phase(
         for node, values in node_totals.items()
     }
     # The rag.* stages are nested inside execute_task, so exclude them from the share base.
-    measured_total = sum(
-        item["total_ms"]
-        for node, item in node_profile.items()
-        if not node.startswith("rag.")
-    ) or 1.0
+    measured_total = (
+        sum(item["total_ms"] for node, item in node_profile.items() if not node.startswith("rag."))
+        or 1.0
+    )
     for item in node_profile.values():
         item["share_of_measured_ms"] = round(item["total_ms"] / measured_total, 4)
     statuses: dict[str, int] = defaultdict(int)
@@ -119,9 +119,7 @@ def run_phase(
             "p99": percentile(latencies, 0.99),
             "max": round(max(latencies), 2) if latencies else 0.0,
         },
-        "node_profile": dict(
-            sorted(node_profile.items(), key=lambda item: -item[1]["total_ms"])
-        ),
+        "node_profile": dict(sorted(node_profile.items(), key=lambda item: -item[1]["total_ms"])),
         "errors": [sample.error for sample in samples if sample.error is not None][:5],
     }
 
@@ -173,19 +171,20 @@ def summarise(phases: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> None:
+    settings = Settings.from_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workload", type=Path, default=Path("eval/load_workload.jsonl"))
     parser.add_argument("--requests", type=int, default=50)
     parser.add_argument("--concurrency", type=int, nargs="+", default=[1, 2])
-    parser.add_argument("--output", type=Path, default=Path("artifacts/load/local-result.json"))
+    parser.add_argument(
+        "--output", type=Path, default=settings.artifacts_dir / "load" / "local-result.json"
+    )
     args = parser.parse_args()
 
     workload = [
-        json.loads(line)
-        for line in args.workload.read_text(encoding="utf-8").splitlines()
-        if line
+        json.loads(line) for line in args.workload.read_text(encoding="utf-8").splitlines() if line
     ]
-    runtime = build_runtime(enable_interrupt=False)
+    runtime = build_runtime()
     service = ClientSupportService(
         runtime.graph,
         reviews=runtime.reviews,
@@ -195,9 +194,7 @@ def main() -> None:
     phases = []
     for concurrency in args.concurrency:
         print(f"Running {args.requests} requests at concurrency {concurrency}…")
-        phase = run_phase(
-            service, workload, requests=args.requests, concurrency=concurrency
-        )
+        phase = run_phase(service, workload, requests=args.requests, concurrency=concurrency)
         phases.append(phase)
         print(
             f"  p50={phase['latency_ms']['p50']:.0f} ms  "

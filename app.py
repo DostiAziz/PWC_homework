@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -18,7 +17,6 @@ from pwc_support.domain.models import (
     ReviewRequest,
 )
 from pwc_support.services.client_support import ClientSupportService, WorkflowRun
-from pwc_support.storage.checkpoints import sqlite_checkpointer
 
 st.set_page_config(page_title="PwC Client Support Prototype", page_icon="💬", layout="wide")
 
@@ -27,26 +25,20 @@ st.set_page_config(page_title="PwC Client Support Prototype", page_icon="💬", 
 class Application:
     runtime: Runtime
     service: ClientSupportService
-    # Holding the stack keeps the SQLite checkpoint connection open for the app's life.
-    # Without this reference it is garbage collected and every resume fails.
-    stack: ExitStack
 
 
 @st.cache_resource
 def get_application() -> Application:
-    """Open the local runtime once, keeping the SQLite checkpoint store alive."""
-    stack = ExitStack()
+    """Open the local runtime once for the Streamlit session."""
     settings = Settings.from_env()
-    saver = stack.enter_context(sqlite_checkpointer(settings.checkpoints_db))
-    runtime = build_runtime(settings, checkpointer=saver, enable_interrupt=True)
+    runtime = build_runtime(settings)
     service = ClientSupportService(
         runtime.graph,
         reviews=runtime.reviews,
         database=runtime.database,
-        mailbox=runtime.mailbox,
         review_service=runtime.review_service,
     )
-    return Application(runtime=runtime, service=service, stack=stack)
+    return Application(runtime=runtime, service=service)
 
 
 def render_run_details(run: WorkflowRun) -> None:
@@ -118,9 +110,7 @@ def render_run_details(run: WorkflowRun) -> None:
             )
 
         excerpts = [
-            (result["task_id"], hit)
-            for result in run.rag_results
-            for hit in result.get("hits", [])
+            (result["task_id"], hit) for result in run.rag_results for hit in result.get("hits", [])
         ]
         if excerpts:
             st.markdown("**Retrieved evidence**")
@@ -161,6 +151,7 @@ def _cited_sources(citations: list[dict[str, Any]], text: str) -> list[dict[str,
 
 
 def render_client_chat(service: ClientSupportService) -> None:
+    render_retail_workspace(service)
     st.caption(
         "Ask a general question about publicly described PwC services. Answers are grounded "
         "in the local corpus and cited; sensitive matters are routed to a specialist."
@@ -199,6 +190,68 @@ def render_client_chat(service: ClientSupportService) -> None:
     st.rerun()
 
 
+def render_retail_workspace(service: ClientSupportService) -> None:
+    """Provide explicit demo forms for bounded retail operations."""
+    with st.expander("Retail self-service", expanded=False):
+        product_tab, recommendation_tab, order_tab, return_tab = st.tabs(
+            ["Products", "Recommendations", "Order status", "Return/refund"]
+        )
+        with product_tab:
+            with st.form("product-search-form"):
+                query = st.text_input("Product or category", value="jacket")
+                max_price = st.number_input("Maximum price (EUR)", min_value=0.0, value=200.0)
+                submitted = st.form_submit_button("Search products")
+            if submitted:
+                run = service.submit(
+                    body=f"Show products matching {query} under {max_price} EUR",
+                    client_id=st.session_state.client_id,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                st.success(run.outcome.message)
+                for line in run.outcome.message.splitlines():
+                    if ":" in line:
+                        st.info(line)
+        with recommendation_tab:
+            with st.form("recommendation-form"):
+                need = st.text_input("What do you need?", value="waterproof jacket")
+                recommendation = st.form_submit_button("Find recommendations")
+            if recommendation:
+                run = service.submit(
+                    body=f"Recommend products for {need}",
+                    client_id=st.session_state.client_id,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                st.success(run.outcome.message)
+        with order_tab:
+            with st.form("order-status-form"):
+                order_id = st.text_input("Order ID", value="ORD-1001")
+                lookup = st.form_submit_button("Check order")
+            if lookup:
+                run = service.submit(
+                    body=f"What is the status of order {order_id}?",
+                    client_id=st.session_state.client_id,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                st.success(run.outcome.message)
+        with return_tab:
+            with st.form("return-form"):
+                return_order = st.text_input("Order ID", value="ORD-1001", key="return_order")
+                item_id = st.text_input("Item ID", value="ITEM-1001")
+                reason = st.text_input("Reason", value="wrong size")
+                request = st.form_submit_button("Request return or refund")
+            if request:
+                run = service.submit(
+                    body=f"I want a refund for {return_order} {item_id} because {reason}",
+                    client_id=st.session_state.client_id,
+                    conversation_id=st.session_state.conversation_id,
+                )
+                st.info(run.outcome.message)
+                if run.outcome.case_id:
+                    st.warning(
+                        f"Case ID: {run.outcome.case_id}. A specialist must approve this request."
+                    )
+
+
 def render_email(service: ClientSupportService, runtime: Runtime) -> None:
     st.subheader("Simulated inbox")
     st.caption(
@@ -218,6 +271,7 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
                 conversation_id=received.conversation_id,
                 thread_id=received.provider_thread_id,
                 subject=subject,
+                provider_message_id=received.provider_message_id,
             )
         st.success(f"Status: {run.outcome.status.value}")
         st.write(run.outcome.message)
@@ -239,19 +293,32 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
             )
             st.write(message.body)
 
+    reviewed = runtime.mailbox_repository.list_messages(recipient=sender)
+    st.markdown(f"**Reviewed responses ({len(reviewed)})**")
+    for message in reversed(reviewed[-10:]):
+        with st.container(border=True):
+            st.caption(
+                f"thread {message['provider_thread_id']} → {message['recipient_id']} · "
+                f"{message['created_at']}"
+            )
+            st.write(message["body"])
 
-def render_review(service: ClientSupportService, dispatcher: Any | None = None) -> None:
+
+def render_review(service: ClientSupportService) -> None:
     st.subheader("Pending specialist reviews")
-    st.caption("Reviews are durable SQLite cases. Decisions are applied asynchronously and delivered through the simulated mailbox.")
+    st.caption(
+        "Reviews are durable SQLite cases. Decisions are applied asynchronously and "
+        "delivered through the simulated mailbox."
+    )
     pending = service.pending_reviews()
     if not pending:
-        st.info("No pending reviews. Sensitive enquiries appear here as soon as they pause.")
+        st.info("No pending reviews. Sensitive enquiries appear here after they are queued.")
         return
     for review in pending:
-        _render_review_card(service, review, dispatcher)
+        _render_review_card(service, review)
 
 
-def _render_review_card(service: ClientSupportService, review: ReviewRequest, dispatcher: Any | None = None) -> None:
+def _render_review_card(service: ClientSupportService, review: ReviewRequest) -> None:
     key = str(review.review_id)
     with st.container(border=True):
         st.markdown(f"**Case {review.case_id}** · review `{key[:8]}`")
@@ -278,6 +345,11 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest, di
                 ReviewDecisionKind.SEND_RESPONSE.value,
                 ReviewDecisionKind.TAKE_OWNERSHIP.value,
                 ReviewDecisionKind.REJECT.value,
+                ReviewDecisionKind.APPROVE_REFUND.value,
+                ReviewDecisionKind.REJECT_REFUND.value,
+                ReviewDecisionKind.APPROVE_RETURN.value,
+                ReviewDecisionKind.REQUEST_INFORMATION.value,
+                ReviewDecisionKind.OFFER_REPLACEMENT.value,
             ],
             key=f"kind-{key}",
         )
@@ -288,17 +360,19 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest, di
         )
         reviewer = st.text_input("Reviewer", value="specialist-1", key=f"reviewer-{key}")
         if st.button("Submit decision", key=f"submit-{key}", type="primary"):
-            result = service.decide_review(
-                review_id=review.review_id,
-                decision_id=uuid4(),
-                expected_version=review.response_version,
-                reviewer_id=reviewer,
-                kind=ReviewDecisionKind(kind),
-                reviewed_text=edited or None,
-                reason="reviewer decision",
-            )
-            if dispatcher is not None and result.outbox_key:
-                dispatcher.dispatch_once(worker_id="streamlit-reviewer")
+            try:
+                result = service.decide_review(
+                    review_id=review.review_id,
+                    decision_id=uuid4(),
+                    expected_version=review.response_version,
+                    reviewer_id=reviewer,
+                    kind=ReviewDecisionKind(kind),
+                    reviewed_text=edited or None,
+                    reason="reviewer decision",
+                )
+            except PermissionError:
+                st.error("Reviewer identity is not authorized for this queue.")
+                return
             st.success(f"Decision recorded: {result.case_status.value}")
             st.rerun()
 
@@ -307,7 +381,7 @@ def initialise_session() -> None:
     defaults: dict[str, Any] = {
         "messages": [],
         "conversation_id": uuid4(),
-        "client_id": "demo-client",
+        "client_id": "CUS-1001",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -349,4 +423,4 @@ with client_tab:
 with email_tab:
     render_email(service, application.runtime)
 with review_tab:
-    render_review(service, runtime.dispatcher)
+    render_review(service)

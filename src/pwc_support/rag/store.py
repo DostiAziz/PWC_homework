@@ -57,9 +57,7 @@ class ChromaKnowledgeBase:
         managed_source_ids: set[str] | None = None,
     ) -> SyncReport:
         source_ids = managed_source_ids or {chunk.source_id for chunk in chunks}
-        current = {
-            chunk.chunk_id: chunk for chunk in chunks if chunk.source_id in source_ids
-        }
+        current = {chunk.chunk_id: chunk for chunk in chunks if chunk.source_id in source_ids}
         existing_ids: set[str] = set()
         for source_id in source_ids:
             existing = self.collection.get(where={"source_id": source_id})
@@ -166,15 +164,18 @@ class ChromaKnowledgeBase:
         embeddings = result.get("embeddings")
         return tuple(
             RetrievalHit(
-                source_id=str(metadata["source_id"]), chunk_id=str(result["ids"][index]),
-                title=str(metadata["title"]), text=str(documents[index]),
+                source_id=str(metadata["source_id"]),
+                chunk_id=str(result["ids"][index]),
+                title=str(metadata["title"]),
+                text=str(documents[index]),
                 heading=str(metadata.get("heading", "")),
                 canonical_url=metadata.get("canonical_url") or None,
                 similarity=cls._cosine(
                     query_embedding,
                     None if embeddings is None else embeddings[index],
                 ),
-                language=str(metadata["language"]), source_status=str(metadata["source_status"]),
+                language=str(metadata["language"]),
+                source_status=str(metadata["source_status"]),
                 source_type="lexical",
             )
             for index, metadata in enumerate(metadatas)

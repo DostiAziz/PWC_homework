@@ -17,10 +17,7 @@ class SupportState(TypedDict, total=False):
     channel: str
     case_id: str | None
     triage: dict[str, Any]
-    semantic_risk: dict[str, Any]
     routing_snapshot: dict[str, Any]
-    final_routing: dict[str, Any]
-    inbound_claim: dict[str, Any]
     evidence: dict[str, Any]
     plan: dict[str, Any]
     expected_task_ids: list[str]
@@ -33,17 +30,10 @@ class SupportState(TypedDict, total=False):
     tool_calls: Annotated[list[dict[str, Any]], append_events]
     verification: dict[str, Any]
     review_request: dict[str, Any]
-    review_decision: dict[str, Any]
-    escalation_intent: dict[str, Any]
-    inbound_claim_result: dict[str, Any]
-    review_decision_result: dict[str, Any]
     events: Annotated[list[dict[str, Any]], append_events]
     delivery: dict[str, Any]
     error: dict[str, Any]
     outcome: dict[str, Any]
     retail_intent: str
     retail_answer: str
-    tool_results: dict[str, Any]
     action_proposal: dict[str, Any]
-    action_risk: str
-    return_id: str

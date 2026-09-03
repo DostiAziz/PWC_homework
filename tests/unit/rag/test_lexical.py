@@ -6,10 +6,17 @@ from pwc_support.rag.lexical import LexicalIndex
 
 def make_chunk(chunk_id: str, source_id: str, text: str) -> CorpusChunk:
     return CorpusChunk(
-        chunk_id=chunk_id, source_id=source_id, title="Support guide", heading="Errors",
-        original_text=text, context="Technical support error reference.",
-        embedding_text=f"Technical support error reference. {text}", token_count=5,
-        chunk_index=0, document_version="1", document_checksum="abc",
+        chunk_id=chunk_id,
+        source_id=source_id,
+        title="Support guide",
+        heading="Errors",
+        original_text=text,
+        context="Technical support error reference.",
+        embedding_text=f"Technical support error reference. {text}",
+        token_count=5,
+        chunk_index=0,
+        document_version="1",
+        document_checksum="abc",
     )
 
 

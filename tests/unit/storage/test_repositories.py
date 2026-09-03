@@ -7,6 +7,7 @@ from pwc_support.domain.models import (
     Citation,
     OperationalEvent,
     ReviewCategory,
+    ReviewDecisionKind,
     ReviewRequest,
 )
 from pwc_support.storage.database import Database
@@ -46,7 +47,13 @@ def test_review_repository_lists_pending_and_records_decision(tmp_path: Path) ->
 
     reviews.create(review)
     assert reviews.list_pending()[0].review_id == review.review_id
-    reviews.mark_decided(review.review_id)
+    reviews.decide(
+        review_id=review.review_id,
+        decision_id=uuid4(),
+        expected_version=review.response_version,
+        reviewer_id="specialist-1",
+        kind=ReviewDecisionKind.REJECT,
+    )
     assert reviews.list_pending() == []
 
 
@@ -68,8 +75,8 @@ def test_events_are_stored_without_message_content(tmp_path: Path) -> None:
     assert database.list_events(event.run_id)[0].details == {"route": "plan"}
 
 
-def test_review_survives_a_restart_with_its_checkpoint_and_evidence(tmp_path: Path) -> None:
-    """A queued review must be resumable by a process that did not create it."""
+def test_review_survives_a_restart_with_evidence_and_delivery_metadata(tmp_path: Path) -> None:
+    """A queued review remains actionable in a process that did not create it."""
     path = tmp_path / "operations.sqlite3"
     review = ReviewRequest(
         review_id=uuid4(),
@@ -88,7 +95,9 @@ def test_review_survives_a_restart_with_its_checkpoint_and_evidence(tmp_path: Pa
                 similarity=0.82,
             ),
         ),
-        checkpoint_id="run-abc123",
+        delivery_recipient="client@example.test",
+        delivery_thread_id="thread-abc123",
+        delivery_subject="Confidential report",
         response_version=1,
     )
 
@@ -101,8 +110,10 @@ def test_review_survives_a_restart_with_its_checkpoint_and_evidence(tmp_path: Pa
     restarted.initialize()
     pending = ReviewRepository(restarted).list_pending()[0]
 
-    assert pending.checkpoint_id == "run-abc123"
     assert [citation.source_id for citation in pending.evidence] == ["pwc-global-services"]
+    assert pending.delivery_recipient == "client@example.test"
+    assert pending.delivery_thread_id == "thread-abc123"
+    assert pending.delivery_subject == "Confidential report"
 
 
 def test_initialize_backfills_columns_on_a_database_from_an_earlier_version(

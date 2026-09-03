@@ -9,8 +9,6 @@ from pwc_support.domain.models import (
     IncomingMessage,
     PlannedTask,
     ReviewCategory,
-    ReviewDecision,
-    ReviewDecisionKind,
     TaskKind,
     WorkPlan,
 )
@@ -49,16 +47,6 @@ def test_message_rejects_oversized_body() -> None:
                 "language": "en",
                 "received_at": datetime.now(UTC),
             }
-        )
-
-
-def test_review_edit_requires_text_and_current_version() -> None:
-    with pytest.raises(ValidationError):
-        ReviewDecision(
-            review_id=uuid4(),
-            kind=ReviewDecisionKind.EDIT,
-            reviewer_id="r-1",
-            response_version=1,
         )
 
 
