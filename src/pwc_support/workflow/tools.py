@@ -151,3 +151,4 @@ class Toolbox:
 
     case_tool: CaseTool | None = None
     mailbox_tool: MailboxTool | None = None
+    retail_tools: list[Any] | None = None
