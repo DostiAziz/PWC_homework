@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from pwc_support.domain.models import (
     Citation,
+    EvidenceBundle,
     RagRequest,
     RagResult,
     RetrievalBatch,
@@ -71,6 +72,7 @@ def build_rag_graph(
     max_selected_hits: int = 4,
     max_evidence_chars: int = 6000,
     answer_tokens: int = 512,
+    generate: bool = True,
     checkpointer: Any = False,
 ) -> Any:
     """Compile the dedicated four-node retrieval-augmented-generation subgraph.
@@ -78,6 +80,10 @@ def build_rag_graph(
     The subgraph is stateless by default (`checkpointer=False`). It never interrupts, and
     the main graph fans several knowledge tasks onto the same instance in one superstep,
     which would otherwise collide in a single inherited checkpoint namespace.
+
+    With `generate=False` the same retrieval and selection run, but the graph stops after
+    `select_evidence`. The escalation path uses that mode to put sources in front of a
+    specialist without ever asking the model to draft an answer to a sensitive enquiry.
     """
 
     def _timed(name: str, started: float) -> dict[str, float]:
@@ -160,13 +166,27 @@ def build_rag_graph(
     builder.add_node("prepare_query", prepare_query_node)
     builder.add_node("retrieve_candidates", retrieve_candidates_node)
     builder.add_node("select_evidence", select_evidence_node)
-    builder.add_node("answer_with_citations", answer_with_citations_node)
     builder.add_edge(START, "prepare_query")
     builder.add_edge("prepare_query", "retrieve_candidates")
     builder.add_edge("retrieve_candidates", "select_evidence")
-    builder.add_conditional_edges("select_evidence", route_after_selection)
-    builder.add_edge("answer_with_citations", END)
+    if generate:
+        builder.add_node("answer_with_citations", answer_with_citations_node)
+        builder.add_conditional_edges("select_evidence", route_after_selection)
+        builder.add_edge("answer_with_citations", END)
+    else:
+        # Evidence-only: the generation node is not compiled in at all, so no code path
+        # can reach the model from an escalated enquiry.
+        builder.add_edge("select_evidence", END)
     return builder.compile(checkpointer=checkpointer)
+
+
+def to_evidence_bundle(state: dict[str, Any]) -> EvidenceBundle:
+    """Project an evidence-only run onto the sources a specialist should read."""
+    return EvidenceBundle(
+        citations=tuple(state.get("citations", ())),
+        hits=tuple(state.get("selected", ())),
+        used_filter_fallback=bool(state.get("used_filter_fallback", False)),
+    )
 
 
 def to_rag_result(state: dict[str, Any]) -> RagResult:

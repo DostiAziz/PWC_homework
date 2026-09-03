@@ -12,6 +12,9 @@ class FakeKnowledgeBase:
 
 
 class FakeGenerator:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
     def text(
         self,
         *,
@@ -20,6 +23,7 @@ class FakeGenerator:
         max_tokens: int = 512,
         temperature: float = 0.2,
     ) -> str:
+        self.calls.append(user)
         return "PwC provides consulting services. [S1]"
 
 
@@ -38,3 +42,14 @@ def test_query_preparation_resolves_customer_support_pronouns() -> None:
         "What services do you provide? PwC business services"
     )
     assert prepare_query("What services does PwC provide?") == "What services does PwC provide?"
+
+
+def test_gather_evidence_selects_sources_without_calling_the_model() -> None:
+    generator = FakeGenerator()
+    answerer = RagAnswerer(FakeKnowledgeBase(), generator)
+
+    bundle = answerer.gather_evidence(RagRequest(question="Was our report exposed?"))
+
+    assert [citation.source_id for citation in bundle.citations] == ["source-1"]
+    assert bundle.citations[0].marker == "[S1]"
+    assert generator.calls == []
