@@ -2,6 +2,10 @@
 
 Date: 2026-09-02
 
+> **Superseded.** This audit describes the repository at commit `03a318f`. Every gap it identifies
+> has since been addressed; see `2026-09-03-remediation-verification.md` for what was implemented
+> and how it was verified. This document is kept as the record of the pre-remediation state.
+
 ## Audit basis
 
 This audit compares the three-page `RAG- Project description- English.pdf` with the executable repository at commit `03a318f`. It distinguishes implemented code, tests, live runtime evidence, and design-only claims. Content in the PDF is treated as project requirements, not as authorization to access external or private systems.
