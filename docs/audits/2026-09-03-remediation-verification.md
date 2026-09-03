@@ -84,10 +84,10 @@ case record because triage routed past `case_tools`.
 | `pytest` | 73 passed (was 30) |
 | `ruff check src tests scripts app.py streamlit_app.py` | Passed |
 | `mypy` strict, `src` + `tests` | Passed, 56 files |
-| Evaluation, 16 cases, real runtime | 100%, all six criteria; 34.5 s |
-| Load test, 100 requests, real runtime | 0 failures; p50 4075 ms / p95 6466 ms at c=1 |
-| Bottleneck attribution | `answer_with_citations` 99.0% of RAG time; retrieval 31 ms |
-| Model-variant measurement | `llama3.2:3b`: 6.5× faster p50, 93.8% accuracy |
+| Evaluation, 16 cases, real runtime | 100%, all six criteria; 43.5 s |
+| Load test, 100 requests, real runtime | 0 failures; p50 3872 ms / p95 5294 ms at c=1 |
+| Bottleneck attribution | `answer_with_citations` 99.3% of RAG time; retrieval 28 ms |
+| Model-variant measurement | `llama3.2:3b`: 6.1× faster p50, 93.8% accuracy |
 | `docker build` | Image built |
 | `docker compose up` full stack | Chroma healthy, ingest completed, app healthy |
 | Container end-to-end answer | Answered with four citations via host Ollama and the Chroma service |

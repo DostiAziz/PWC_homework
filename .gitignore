@@ -9,5 +9,11 @@ __pycache__/
 data/chroma/*
 data/state/*
 artifacts/events/*.jsonl
+# Ad-hoc runs stay local; the committed result files below are assessment evidence.
 artifacts/evaluation/*.json
 artifacts/load/*.json
+!artifacts/evaluation/final-result.json
+!artifacts/evaluation/variant-llama32-3b.json
+!artifacts/load/local-result.json
+!artifacts/load/variant-llama32-3b.json
+!artifacts/load/variant-tokens256.json
