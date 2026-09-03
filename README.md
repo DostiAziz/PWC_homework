@@ -57,27 +57,30 @@ durable interrupt/resume — the four things this workflow actually needs.
                                         ClientSupportService
                             (channel contract, event + review persistence)
                                                     │
-    START → intake → triage ─┬─ review ────────────────────────────────→ human_review ─┐
-                             │                                                          │
-                             ├─ greeting / clarify ──────────→ respond_directly ────────┤
-                             │                                          ↑               │
-                             └─ plan → plan_work                        │               │
-                                          │ Send fan-out                │               │
-                                          ↓                             │               │
-                                    execute_task × N                    │               │
-                                          │ reducer join                │               │
-                                          ↓                             │               │
-                                     case_tools → compose_reply → verify_response       │
-                                                                         │              │
-                                              release ───────────────────┼──────────────┤
+    START → intake → triage ─┬─ review ──→ gather_evidence ──────────→ human_review ─┐
+                             │             (retrieval only)                          │
+                             ├─ greeting / clarify ──────────→ respond_directly ──────┤
+                             │                                          ↑             │
+                             └─ plan → plan_work                        │             │
+                                          │ Send fan-out                │             │
+                                          ↓                             │             │
+                                    execute_task × N                    │             │
+                                          │ reducer join                │             │
+                                          ↓                             │             │
+                                     case_tools → compose_reply → verify_response     │
+                                                                         │            │
+                                              release ───────────────────┼────────────┤
                                               review  ───────────────────┼──→ human_review
-                                              revise  ───────────────────┘              │
-                                                                                        ↓
-                                                                              finalise_case → END
+                                              revise  ───────────────────┘            │
+                                                                                      ↓
+                                                                            finalise_case → END
 
     execute_task (knowledge_query) invokes the RAG subgraph:
         prepare_query → retrieve_candidates → select_evidence ─┬─ answer_with_citations → END
                                                                └─ (no evidence) ──────→ END
+
+    gather_evidence invokes the same subgraph compiled without the generation node:
+        prepare_query → retrieve_candidates → select_evidence ────────────────────────→ END
 ```
 
 | Layer | Module | Responsibility |
@@ -98,12 +101,13 @@ and `tool_calls` append, and `rag_results` de-duplicates by task id and keeps a 
 
 ## Workflow nodes and routing
 
-Ten nodes, all reachable and all doing independent work:
+Eleven nodes, all reachable and all doing independent work:
 
 | Node | What it does |
 |---|---|
 | `intake` | Normalises the message; assigns conversation, thread, client and run identifiers |
 | `triage` | Deterministic risk + route classification; detects an existing case reference |
+| `gather_evidence` | Researches an escalated enquiry for the specialist — retrieval only, no generation |
 | `plan_work` | Decomposes the enquiry into 1–4 typed `PlannedTask`s |
 | `execute_task` | Fan-out worker: runs the RAG subgraph or the case-lookup tool, once per task |
 | `case_tools` | Joins the fan-out; opens or reuses the durable case record |
@@ -129,6 +133,14 @@ answered with an explicit abstention, not sent to a specialist. Human review is 
 categories, for an evidence failure on an enquiry that already has a tracked case, and for a draft
 that cites a source that was never retrieved.
 
+**An escalation is researched, not just queued.** A risk-classified enquiry goes to
+`gather_evidence`, which runs the RAG subgraph in evidence-only mode: the same retrieval, the same
+similarity threshold, and then a stop. The specialist opens the review with the relevant published
+sources already in front of them rather than a blank box, while the rule that matters is preserved
+structurally — the generation node is not compiled into that graph at all, so no code path can ask
+the model to draft an answer to a legal or confidentiality question. Retrieval for an escalation
+costs ~20 ms and no tokens.
+
 ## The RAG subgraph
 
 `rag/subgraph.py` compiles its own `StateGraph` with its own state, invoked by `execute_task`:
@@ -143,6 +155,10 @@ It is compiled with `checkpointer=False`. The subgraph never interrupts, and the
 several knowledge tasks onto the same instance within one superstep, which would otherwise collide
 in a single inherited checkpoint namespace. Skipping generation when no evidence clears the
 threshold is what makes an out-of-scope question cost ~35 ms instead of ~4 s.
+
+`build_rag_graph(generate=False)` compiles the same three retrieval nodes *without* step 4. That is
+the mode `gather_evidence` uses for escalations, so the two paths cannot drift: a specialist sees
+exactly the evidence the answering path would have selected, under the same threshold.
 
 ## Tools
 
@@ -163,14 +179,20 @@ the outcome and bumps its version. On the simulated email channel the reply is d
 ## Human review, checkpoints and resumption
 
 A risk-classified enquiry reaches `human_review`, which calls LangGraph's `interrupt()` with the
-case, categories, original message, proposed reply and proposed actions. The run is checkpointed to
-SQLite (`data/state/checkpoints.sqlite3`) and the `ReviewRequest` is persisted to the operations
-database, so it survives a process restart.
+case, categories, original message, retrieved background sources, proposed reply and proposed
+actions. The run is checkpointed to SQLite (`data/state/checkpoints.sqlite3`) and the
+`ReviewRequest` is persisted to the operations database, so it survives a process restart.
 
 The reviewer tab lists pending reviews and submits a typed `ReviewDecision`
 (`approve`, `edit`, `reject`, `request_revision`, `take_ownership`). `ClientSupportService.resume`
 replays the paused run with `Command(resume=...)`; the graph applies the decision, closes the case
 and delivers the reply. **The client's reply is produced by the workflow, not by the UI.**
+`request_revision` has no redraft loop, so it is handled like `take_ownership` — the enquiry stays
+with the specialist. It never falls through to approving the draft it just rejected.
+
+The paused run's checkpoint namespace is stored on the `ReviewRequest` itself, so the queue carries
+everything resume needs. A review raised before a restart, or in someone else's browser session, is
+still resumable from the reviewer tab; the page holds no state of its own.
 
 Each enquiry gets its own checkpoint namespace (`run-<run_id>`) while the conversation id stays
 stable across messages. Sharing one namespace across a conversation makes every later run replay
@@ -223,26 +245,26 @@ Everything runs on local open-source models through Ollama on a 24 GB M4. No pai
 | Role | Model | Why |
 |---|---|---|
 | Generation | `gpt-oss:20b` (Q4, ~13 GB resident) | Best instruction-following of the local options for "answer only from evidence and keep the markers" |
-| Embeddings | `nomic-embed-text` (768-d) | Small, fast (~28 ms per retrieval including BM25 and fusion), good enough separation on this corpus |
+| Embeddings | `nomic-embed-text` (768-d) | Small, fast (~33 ms per retrieval including BM25 and fusion), good enough separation on this corpus |
 
 The trade-offs are real and were measured, not assumed:
 
 - **Memory.** `gpt-oss:20b` at Q4 leaves little headroom on 24 GB alongside Chroma, SQLite and
   Streamlit. `Settings` therefore caps `num_ctx` at 8192 and refuses parallel generation above one
   worker unless the context window is reduced.
-- **Concurrency buys nothing.** Doubling concurrency raised p95 latency by 1.82× while throughput
-  moved 0.301 → 0.308 req/s (+2%). One Ollama model instance is a serialised resource; the right
+- **Concurrency buys nothing.** Doubling concurrency raised p95 latency by 1.68× while throughput
+  moved 0.287 → 0.308 req/s (+7%). One Ollama model instance is a serialised resource; the right
   answer is to queue, not to add threads.
 - **Quality vs latency is a genuine choice.** Swapping generation to `llama3.2:3b`
-  (`PWC_GENERATION_MODEL=llama3.2:3b`) cut p50 from 3872 ms to 636 ms (6.1×) and raised throughput
-  5.0×, at 93.8% evaluation accuracy instead of 100%. The one regression was a real one: the
+  (`PWC_GENERATION_MODEL=llama3.2:3b`) cut p50 from 3933 ms to 623 ms (6.3×) and raised throughput
+  4.5×, at 93.8% evaluation accuracy instead of 100%. The one regression was a real one: the
   smaller model omitted its citation markers on a case, and verification correctly withheld the
   answer rather than sending it unattributed.
 - **Determinism.** Answer generation runs at temperature 0 so a support desk gives the same client
   the same cited answer twice.
 - **Token caps do not help.** Reducing `answer_tokens` from 512 to 256 left p50 unchanged within
-  run-to-run noise (3872 → 3922 ms, i.e. marginally worse): the model never reaches the cap, so
-  latency is bounded by what it chooses to write, not by the limit.
+  run-to-run noise (3933 → 3948 ms): the model never reaches the cap, so latency is bounded by what
+  it chooses to write, not by the limit.
 
 ## Evaluation results
 
@@ -262,7 +284,7 @@ PYTHONPATH=src .venv/bin/python scripts/run_evaluation.py
 | `tasks` | The enquiry decomposed into the expected task kinds | 100% |
 | `attribution` | A released answer carries a marker resolving to a real citation | 100% |
 
-**16/16 cases pass (100%)**, in 43.5 s total. Full per-case output, including cited sources, visited
+**16/16 cases pass (100%)**, in 49.8 s total. Full per-case output, including cited sources, visited
 nodes and latencies, is in `artifacts/evaluation/final-result.json`.
 
 The set spans answerable questions across all five sources, a multi-part enquiry requiring
@@ -284,32 +306,34 @@ PYTHONPATH=src .venv/bin/python scripts/run_load.py
 
 | Concurrency | p50 | p95 | p99 | Throughput | Failures |
 |---|---|---|---|---|---|
-| 1 | 3872 ms | 5294 ms | 5742 ms | 0.301 req/s | 0 |
-| 2 | 7824 ms | 9635 ms | 9650 ms | 0.308 req/s | 0 |
+| 1 | 3933 ms | 5775 ms | 6089 ms | 0.287 req/s | 0 |
+| 2 | 7750 ms | 9676 ms | 9760 ms | 0.308 req/s | 0 |
 
-**Measured bottleneck: token generation.** `execute_task` accounts for 99.9% of measured node time,
+**Measured bottleneck: token generation.** `execute_task` accounts for 99.8% of measured node time,
 and within the RAG subgraph the split is:
 
 | Stage | Share of RAG time | Mean |
 |---|---|---|
-| `answer_with_citations` | 99.3% | 4113 ms |
-| `retrieve_candidates` | 0.7% | 28 ms |
+| `answer_with_citations` | 99.2% | 4295 ms |
+| `retrieve_candidates` | 0.8% | 33 ms |
 | `select_evidence`, `prepare_query` | ~0% | <1 ms |
 
-Retrieval — embedding, Chroma query, BM25, fusion, cosine scoring — is 28 ms. It is not the problem
-and does not need optimising. Doubling concurrency multiplied p95 by 1.82× while throughput moved
-1.02×, which is the signature of one serialised resource (the single Ollama model instance) rather
-than client-side overhead.
+Retrieval — embedding, Chroma query, BM25, fusion, cosine scoring — is 33 ms. It is not the problem
+and does not need optimising. The escalation path's `gather_evidence` costs 32 ms on the same
+measurement, confirming that researching an escalation for the specialist is free relative to the
+generation it deliberately skips. Doubling concurrency multiplied p95 by 1.68× while throughput
+moved 1.07×, which is the signature of one serialised resource (the single Ollama model instance)
+rather than client-side overhead.
 
 **Evidence-based recommendations:**
 
 1. **To cut latency, change the generation model, not the pipeline.** `llama3.2:3b` measured
-   6.1× lower p50 and 5.0× higher throughput at 93.8% accuracy. Everything else in the workflow is
+   6.3× lower p50 and 4.5× higher throughput at 93.8% accuracy. Everything else in the workflow is
    already sub-millisecond, so no amount of pipeline tuning can produce a comparable gain.
-2. **Do not add request concurrency; add a queue.** Concurrency 2 bought 2% throughput for 82%
+2. **Do not add request concurrency; add a queue.** Concurrency 2 bought 7% throughput for 68%
    worse p95. Keep `max_parallel_generations` at 1 and apply admission control, or run a second
    Ollama instance if the hardware allows.
-3. **Retrieval quality is nearly free to improve.** At 28 ms, raising `top_k` or adding a reranking
+3. **Retrieval quality is nearly free to improve.** At 33 ms, raising `top_k` or adding a reranking
    stage is affordable if answer quality ever needs it.
 
 Full output, including per-request latencies and per-node profiles, is in
@@ -340,7 +364,7 @@ PYTHONPATH=src .venv/bin/streamlit run app.py
 Quality gates:
 
 ```bash
-PYTHONPATH=src .venv/bin/pytest -q          # 73 unit tests
+PYTHONPATH=src .venv/bin/pytest -q          # 79 unit tests
 PYTHONPATH=src .venv/bin/ruff check src tests scripts app.py
 PYTHONPATH=src .venv/bin/mypy src tests     # strict mode
 ```
@@ -370,7 +394,14 @@ PWC_APP_PORT=8502 docker compose up --build   # if 8501 is taken
 
 Ollama stays **native on the host** — containerising a 20B model on a Mac would lose GPU
 acceleration. The containers reach it through `host.docker.internal:11434`, declared with
-`extra_hosts: host-gateway`. The `ingest` service runs to completion before `app` starts
+`extra_hosts: host-gateway`. The model settings are passed through to both services, so the
+measured swap below works on the Docker path too:
+
+```bash
+PWC_GENERATION_MODEL=llama3.2:3b docker compose up --build
+```
+
+The `ingest` service runs to completion before `app` starts
 (`depends_on: service_completed_successfully`), so the Chroma service is never empty when the UI
 opens, and Chroma has a TCP health check that both services wait on.
 
@@ -394,7 +425,7 @@ scripts/                  # check_runtime, ingest_corpus, run_evaluation, run_lo
 corpus/                   # manifest + five Markdown sources
 eval/                     # final.jsonl (16 cases), development.jsonl, load_workload.jsonl
 artifacts/                # measured evaluation and load results
-tests/                    # 73 unit tests with in-memory doubles
+tests/                    # 79 unit tests with in-memory doubles
 docs/audits/              # requirements audit
 ```
 
@@ -409,14 +440,13 @@ This is a prototype and is scoped as one.
   The bottleneck is measured and the remedies are listed above.
 - **Retrieval quality is not benchmarked at scale.** Eight chunks over five documents cannot
   establish that the 0.45 threshold generalises; it is calibrated to this corpus.
-- **Review resumption is session-scoped in the UI.** Pending reviews persist in SQLite and the
-  paused runs persist in the checkpoint store, but the reviewer page maps a review to its
-  checkpoint namespace in Streamlit session state, so a review raised in an earlier session shows
-  an explicit notice instead of a resume button. Persisting that mapping is the fix.
-- **`request_revision` is accepted but not looped.** It is treated as a terminal decision;
-  `revision_count` and `max_revisions` exist in state for a redraft loop that is not implemented.
-- **Deduplication is not implemented.** `SupportState.duplicate` is unused; a resent message
-  creates a second case.
+- **`request_revision` does not loop.** It is a terminal decision that leaves the enquiry with the
+  specialist rather than triggering an automatic redraft. A redraft loop is not implemented and no
+  configuration pretends otherwise.
+- **Deduplication is not implemented.** A resent message creates a second case.
+- **Escalation evidence is retrieved, not judged.** `gather_evidence` gives the specialist the
+  sources the answering path would have used. It does not assess whether they are adequate for a
+  sensitive matter — that is the specialist's job, which is the point of the escalation.
 - **English only**, enforced by configuration and by a hard metadata filter at retrieval.
 
 ## Provenance

@@ -129,7 +129,7 @@ def run_phase(
 def summarise(phases: list[dict[str, Any]]) -> dict[str, Any]:
     """Name the measured bottleneck rather than asserting one from architecture alone."""
     baseline, scaled = phases[0], phases[-1]
-    hottest = max(
+    hottest: tuple[str, dict[str, Any]] = max(
         (
             (node, item)
             for node, item in baseline["node_profile"].items()

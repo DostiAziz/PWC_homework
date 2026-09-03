@@ -57,3 +57,41 @@ def test_short_input_is_clarified_and_full_questions_are_planned() -> None:
 
 def test_risk_language_still_wins_over_a_polite_opening() -> None:
     assert ReviewPolicy.default().classify_route("Hello, we had a data breach.").value == "review"
+
+
+def test_action_confirmation_is_a_hard_external_action_match() -> None:
+    decision = ReviewPolicy.default().evaluate("Please proceed with that submission.")
+
+    assert ReviewCategory.EXTERNAL_ACTION in decision.categories
+    assert "external_action_confirmation" in decision.matched_rule_ids
+    assert decision.policy_version == "rules-v1"
+
+
+def test_other_short_follow_up_still_requires_clarification() -> None:
+    assert ReviewPolicy.default().classify_route("Which one?").value == "clarify"
+
+
+def test_policy_records_stable_rule_ids_for_every_matching_category() -> None:
+    decision = ReviewPolicy.default().evaluate(
+        "We had a confidential leak and need legal advice."
+    )
+
+    assert decision.matched_rule_ids == (
+        "confidentiality_confidential",
+        "confidentiality_leak",
+        "legal_regulatory_legal_advice",
+    )
+
+
+def test_post_retrieval_failures_map_to_distinct_review_categories() -> None:
+    policy = ReviewPolicy.default()
+
+    insufficient = policy.after_retrieval(evidence_state="insufficient")
+    conflicting = policy.after_retrieval(evidence_state="conflicting")
+    citation_failure = policy.after_retrieval(evidence_state="citation_verification_failure")
+
+    assert insufficient.categories == frozenset({ReviewCategory.INSUFFICIENT_EVIDENCE})
+    assert conflicting.categories == frozenset({ReviewCategory.CONFLICTING_EVIDENCE})
+    assert citation_failure.categories == frozenset(
+        {ReviewCategory.CITATION_VERIFICATION_FAILURE}
+    )

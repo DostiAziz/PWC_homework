@@ -3,7 +3,12 @@ from uuid import UUID, uuid4
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from pwc_support.domain.models import Channel, ReviewDecision, ReviewDecisionKind
+from pwc_support.domain.models import (
+    Channel,
+    OutcomeStatus,
+    ReviewDecision,
+    ReviewDecisionKind,
+)
 from pwc_support.services.client_support import ClientSupportService
 from pwc_support.storage.database import Database
 from pwc_support.storage.repositories import ReviewRepository
@@ -145,4 +150,34 @@ def test_paused_run_reports_only_the_nodes_it_actually_reached(tmp_path: Path) -
 
     run = service.submit(body="We have a confidential data breach.", client_id="client-1")
 
-    assert run.visited_nodes == ["intake", "triage"]
+    # The run pauses inside human_review, so the trace stops at the evidence gathered
+    # for the specialist. Nothing downstream of the interrupt is reported as visited.
+    assert run.visited_nodes == ["intake", "triage", "gather_evidence"]
+
+
+def test_pending_review_is_resumable_from_a_new_service_instance(tmp_path: Path) -> None:
+    """The reviewer page is stateless: the queue itself carries what resume needs."""
+    service = _service(tmp_path)
+    service.submit(
+        body="Our confidential PwC advisory report may have leaked.", client_id="client-1"
+    )
+
+    queued = service.pending_reviews()[0]
+
+    assert queued.checkpoint_id is not None
+    assert [citation.source_id for citation in queued.evidence] == ["pwc-global-services"]
+
+    resumed = service.resume(
+        checkpoint_id=queued.checkpoint_id,
+        decision=ReviewDecision(
+            review_id=queued.review_id,
+            kind=ReviewDecisionKind.EDIT,
+            reviewer_id="specialist-1",
+            response_version=1,
+            edited_text="A specialist will contact you today.",
+        ),
+    )
+
+    assert resumed.outcome.status is OutcomeStatus.ANSWERED
+    assert resumed.outcome.message == "A specialist will contact you today."
+    assert service.pending_reviews() == []

@@ -29,11 +29,16 @@ class Settings(BaseModel):
     chunk_overlap_tokens: int = Field(default=50, ge=0, le=500)
     context_document_max_chars: int = Field(default=24000, ge=2000, le=100000)
     max_planned_tasks: int = Field(default=4, ge=1, le=4)
-    max_revisions: int = Field(default=2, ge=0, le=2)
     top_k: int = Field(default=6, ge=1, le=20)
     minimum_similarity: float = Field(default=0.45, ge=0.0, le=1.0)
     max_selected_hits: int = Field(default=4, ge=1, le=10)
     max_evidence_chars: int = Field(default=6000, ge=500, le=40000)
+    semantic_classifier_model: str = ""
+    semantic_classifier_timeout_seconds: float = Field(default=20.0, gt=0)
+    semantic_classifier_prompt_version: str = "v1"
+    semantic_classifier_taxonomy_version: str = "v1"
+    semantic_classifier_schema_version: str = "v1"
+    semantic_classifier_retry_count: int = Field(default=1, ge=0, le=2)
 
     @property
     def operations_db(self) -> Path:

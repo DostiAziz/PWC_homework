@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -13,7 +14,6 @@ from pwc_support.bootstrap import Runtime, build_runtime
 from pwc_support.config import Settings
 from pwc_support.domain.models import (
     Channel,
-    ReviewDecision,
     ReviewDecisionKind,
     ReviewRequest,
 )
@@ -44,6 +44,7 @@ def get_application() -> Application:
         reviews=runtime.reviews,
         database=runtime.database,
         mailbox=runtime.mailbox,
+        review_service=runtime.review_service,
     )
     return Application(runtime=runtime, service=service, stack=stack)
 
@@ -151,6 +152,14 @@ def render_citations(citations: list[dict[str, Any]]) -> None:
             st.caption(citation["excerpt"][:300])
 
 
+def _cited_sources(citations: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """Limit the client source panel to markers actually used in the answer."""
+    markers = set(re.findall(r"\[S\d+\]", text))
+    if not markers:
+        return citations
+    return [citation for citation in citations if citation.get("marker") in markers]
+
+
 def render_client_chat(service: ClientSupportService) -> None:
     st.caption(
         "Ask a general question about publicly described PwC services. Answers are grounded "
@@ -161,7 +170,9 @@ def render_client_chat(service: ClientSupportService) -> None:
             st.write(entry["content"])
             if entry.get("status"):
                 st.caption(f"Status: {entry['status']}")
-            render_citations(entry.get("citations", []))
+            if entry.get("case_id"):
+                st.info(f"Case ID: {entry['case_id']} - awaiting specialist review")
+            render_citations(_cited_sources(entry.get("citations", []), entry["content"]))
             if entry.get("run") is not None:
                 render_run_details(entry["run"])
 
@@ -180,6 +191,7 @@ def render_client_chat(service: ClientSupportService) -> None:
             "role": "assistant",
             "content": run.outcome.message,
             "status": run.outcome.status.value,
+            "case_id": run.outcome.case_id,
             "citations": [citation.model_dump(mode="json") for citation in run.outcome.citations],
             "run": run,
         }
@@ -209,7 +221,12 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
             )
         st.success(f"Status: {run.outcome.status.value}")
         st.write(run.outcome.message)
-        render_citations([citation.model_dump(mode="json") for citation in run.outcome.citations])
+        render_citations(
+            _cited_sources(
+                [citation.model_dump(mode="json") for citation in run.outcome.citations],
+                run.outcome.message,
+            )
+        )
         render_run_details(run)
 
     outbox = runtime.mailbox.outbox()
@@ -225,10 +242,7 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
 
 def render_review(service: ClientSupportService) -> None:
     st.subheader("Pending specialist reviews")
-    st.caption(
-        "Each decision resumes the paused LangGraph run from its SQLite checkpoint, so the "
-        "client reply is produced by the workflow rather than by this page."
-    )
+    st.caption("Reviews are durable SQLite cases. Decisions are applied asynchronously and delivered through the simulated mailbox.")
     pending = service.pending_reviews()
     if not pending:
         st.info("No pending reviews. Sensitive enquiries appear here as soon as they pause.")
@@ -239,78 +253,63 @@ def render_review(service: ClientSupportService) -> None:
 
 def _render_review_card(service: ClientSupportService, review: ReviewRequest) -> None:
     key = str(review.review_id)
-    checkpoint_id = st.session_state.review_threads.get(key)
     with st.container(border=True):
         st.markdown(f"**Case {review.case_id}** · review `{key[:8]}`")
         st.caption(f"Categories: {', '.join(sorted(review.categories)) or 'none'}")
         st.write(review.original_message)
-        proposed = review.proposed_reply.text if review.proposed_reply else ""
+        if review.evidence:
+            with st.expander(f"Background sources ({len(review.evidence)})", expanded=True):
+                st.caption(
+                    "Retrieved for this enquiry. No reply was drafted — a sensitive "
+                    "enquiry is never answered by the model."
+                )
+                for citation in review.evidence:
+                    label = f"{citation.title} — {citation.heading}"
+                    if citation.canonical_url:
+                        st.markdown(f"**[{label}]({citation.canonical_url})**")
+                    else:
+                        st.markdown(f"**{label}** *(synthetic source)*")
+                    st.caption(f"similarity {citation.similarity:.2f}")
+                    st.text(citation.excerpt[:400])
+        proposed = ""
         kind = st.selectbox(
             "Decision",
-            [item.value for item in ReviewDecisionKind],
+            [
+                ReviewDecisionKind.SEND_RESPONSE.value,
+                ReviewDecisionKind.TAKE_OWNERSHIP.value,
+                ReviewDecisionKind.REJECT.value,
+            ],
             key=f"kind-{key}",
         )
         edited = st.text_area(
             "Reply to the client",
-            value=proposed or "A specialist will contact you shortly.",
+            value=proposed,
             key=f"text-{key}",
         )
         reviewer = st.text_input("Reviewer", value="specialist-1", key=f"reviewer-{key}")
-        if checkpoint_id is None:
-            st.warning(
-                "This review was recorded in a previous session, so its paused run is not "
-                "addressable from this page. Resume it from the session that created it."
-            )
-            return
         if st.button("Submit decision", key=f"submit-{key}", type="primary"):
-            decision = ReviewDecision(
+            result = service.decide_review(
                 review_id=review.review_id,
-                kind=ReviewDecisionKind(kind),
+                decision_id=uuid4(),
+                expected_version=review.response_version,
                 reviewer_id=reviewer,
-                response_version=review.response_version,
-                edited_text=edited or None,
+                kind=ReviewDecisionKind(kind),
+                reviewed_text=edited or None,
+                reason="reviewer decision",
             )
-            with st.spinner("Resuming the checkpointed workflow…"):
-                run = service.resume(checkpoint_id=checkpoint_id, decision=decision)
-            st.session_state.messages.append(
-                {
-                    "role": "assistant",
-                    "content": run.outcome.message,
-                    "status": run.outcome.status.value,
-                    "citations": [
-                        citation.model_dump(mode="json") for citation in run.outcome.citations
-                    ],
-                    "run": run,
-                }
-            )
-            st.session_state.review_threads.pop(key, None)
+            st.success(f"Decision recorded: {result.case_status.value}")
             st.rerun()
 
 
 def initialise_session() -> None:
     defaults: dict[str, Any] = {
         "messages": [],
-        "review_threads": {},
         "conversation_id": uuid4(),
         "client_id": "demo-client",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-
-
-def track_pending_review(run: WorkflowRun) -> None:
-    if run.interrupted and run.review_request is not None:
-        st.session_state.review_threads[str(run.review_request["review_id"])] = run.checkpoint_id
-
-
-class TrackingService(ClientSupportService):
-    """Remember which checkpoint thread each pending review belongs to."""
-
-    def submit(self, **kwargs: Any) -> WorkflowRun:
-        run = super().submit(**kwargs)
-        track_pending_review(run)
-        return run
 
 
 st.title("PwC client support")
@@ -334,12 +333,7 @@ except Exception as error:  # surfaced to the operator, never hidden behind a fa
     )
     st.stop()
 
-service = TrackingService(
-    application.runtime.graph,
-    reviews=application.runtime.reviews,
-    database=application.runtime.database,
-    mailbox=application.runtime.mailbox,
-)
+service = application.service
 settings = application.runtime.settings
 st.sidebar.subheader("Local runtime")
 st.sidebar.write(f"Generation: `{settings.generation_model}`")

@@ -9,6 +9,10 @@ services:
       CHROMA_MODE: http
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
+      # Overridable so the README's measured model swap works on the Docker path too.
+      PWC_GENERATION_MODEL: ${PWC_GENERATION_MODEL:-gpt-oss:20b}
+      PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-nomic-embed-text}
+      PWC_ANSWER_TOKENS: ${PWC_ANSWER_TOKENS:-512}
     volumes:
       - app-data:/app/data
     extra_hosts:
@@ -29,6 +33,10 @@ services:
       CHROMA_MODE: http
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
+      # Overridable so the README's measured model swap works on the Docker path too.
+      PWC_GENERATION_MODEL: ${PWC_GENERATION_MODEL:-gpt-oss:20b}
+      PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-nomic-embed-text}
+      PWC_ANSWER_TOKENS: ${PWC_ANSWER_TOKENS:-512}
     volumes:
       - app-data:/app/data
     extra_hosts:

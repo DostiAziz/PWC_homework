@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 from typing import Any, Literal
@@ -28,6 +30,8 @@ from pwc_support.domain.state import SupportState
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.subgraph import to_rag_result
 from pwc_support.workflow.policy import ReviewPolicy
+from pwc_support.workflow.policy import merge_routing
+from pwc_support.domain.errors import RiskClassificationUnavailable
 from pwc_support.workflow.tools import Toolbox, find_case_reference
 
 MARKER = re.compile(r"\[S\d+\]")
@@ -113,6 +117,7 @@ def renumber_citations(
 def build_graph(
     *,
     policy: ReviewPolicy | None = None,
+    risk_classifier: Any = None,
     rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
     enable_interrupt: bool = False,
@@ -144,7 +149,6 @@ def build_graph(
             "client_id": client_id,
             "channel": channel,
             "draft_version": 1,
-            "revision_count": 0,
             "events": [_event("intake", "completed", started, channel=channel,
                               characters=len(body))],
         }
@@ -154,7 +158,42 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
+        semantic = None
+        failure_class = None
+        if not decision.requires_review and route is Route.PLAN and risk_classifier is not None:
+            try:
+                semantic = risk_classifier.classify(enquiry=body)
+                requires_review, merged_categories = merge_routing(
+                    deterministic=decision, semantic=semantic
+                )
+                if requires_review:
+                    route = Route.REVIEW
+                    decision = decision.__class__(True, merged_categories, (), decision.policy_version)
+            except RiskClassificationUnavailable as error:
+                failure_class = error.failure_class
+                route = Route.UNSUPPORTED
         categories = sorted(category.value for category in decision.categories)
+        snapshot_payload = {
+            "body": body,
+            "route": route.value,
+            "categories": categories,
+            "semantic": semantic.model_dump(mode="json") if semantic else None,
+            "failure_class": failure_class,
+        }
+        snapshot_hash = hashlib.sha256(json.dumps(snapshot_payload, sort_keys=True).encode()).hexdigest()
+        snapshot = {
+            "input_fingerprint": hashlib.sha256(body.encode()).hexdigest(),
+            "provider_message_id": str(state.get("inbound_message_id") or state["run_id"]),
+            "policy_version": decision.policy_version,
+            "deterministic_match": bool(decision.matched_rule_ids),
+            "matched_rule_ids": list(decision.matched_rule_ids),
+            "classifier_invoked": semantic is not None,
+            "classifier_attempts": 1 if semantic is not None else 0,
+            "classifier": semantic.model_dump(mode="json") if semantic else None,
+            "failure_class": failure_class,
+            "pre_retrieval_route": route.value,
+            "snapshot_hash": snapshot_hash,
+        }
         return {
             "triage": {
                 "intent": "client_enquiry",
@@ -163,19 +202,41 @@ def build_graph(
                 "case_reference": find_case_reference(body),
                 "confidence": 0.9 if route is not Route.CLARIFY else 0.4,
             },
+            "routing_snapshot": snapshot,
             "events": [_event("triage", "completed", started, route=route.value,
                               review_categories=categories)],
         }
 
     def route_after_triage(
         state: SupportState,
-    ) -> Literal["plan_work", "human_review", "respond_directly"]:
+    ) -> Literal["plan_work", "gather_evidence", "respond_directly"]:
         route = state["triage"]["route"]
         if route == Route.REVIEW.value:
-            return "human_review"
+            return "gather_evidence"
         if route in (Route.GREETING.value, Route.CLARIFY.value, Route.UNSUPPORTED.value):
             return "respond_directly"
         return "plan_work"
+
+    def gather_evidence(state: SupportState) -> dict[str, Any]:
+        """Research an escalated enquiry for the specialist without drafting a reply.
+
+        A sensitive enquiry must never have the model write an answer, so this runs the
+        RAG subgraph in evidence-only mode: the specialist opens the review with the
+        relevant published sources already in front of them instead of a blank box.
+        """
+        started = time.perf_counter()
+        if rag_answerer is None:
+            return {
+                "events": [_event("gather_evidence", "skipped", started,
+                                  reason="no_retrieval_runtime")]
+            }
+        body = str(state["message"]["body"])
+        bundle = rag_answerer.gather_evidence(RagRequest(question=body))
+        return {
+            "evidence": bundle.model_dump(mode="json"),
+            "events": [_event("gather_evidence", "completed", started,
+                              sources=len(bundle.citations))],
+        }
 
     def plan_work(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
@@ -301,6 +362,11 @@ def build_graph(
                                   operation="reused")],
             }
         categories = state["triage"].get("review_categories") or []
+        if not categories and not state["triage"].get("case_reference"):
+            return {
+                "events": [_event("case_tools", "skipped", started,
+                                  reason="routine_enquiry_no_case")]
+            }
         record, call = tools.case_tool.open_case(
             conversation_id=UUID(state["conversation_id"]),
             client_id=state["client_id"],
@@ -444,6 +510,9 @@ def build_graph(
             "original_message": state["message"]["body"],
             "proposed_reply": state.get("draft", {}),
             "proposed_actions": state.get("proposed_actions", []),
+            # Only the triage path carries background evidence; an enquiry escalated
+            # after drafting arrives with a draft that already cites its own sources.
+            "evidence": state.get("evidence", {}).get("citations", []),
             "verification": state.get("verification", {}),
             "response_version": int(state.get("draft_version", 1)),
         }
@@ -492,7 +561,9 @@ def build_graph(
         edited = str(payload.get("edited_text") or payload.get("reply") or "").strip()
         if kind is ReviewDecisionKind.REJECT:
             message, status = REJECTED_REPLY, OutcomeStatus.UNABLE_TO_ANSWER
-        elif kind is ReviewDecisionKind.TAKE_OWNERSHIP:
+        elif kind in (ReviewDecisionKind.TAKE_OWNERSHIP, ReviewDecisionKind.REQUEST_REVISION):
+            # No redraft loop exists, so asking for a revision leaves the enquiry with the
+            # specialist. It must never fall through to approving the draft it rejected.
             message = edited or PENDING_REVIEW_REPLY
             status = OutcomeStatus.PENDING_REVIEW
         elif kind is ReviewDecisionKind.EDIT:
@@ -560,6 +631,7 @@ def build_graph(
     for name, node in (
         ("intake", intake),
         ("triage", triage),
+        ("gather_evidence", gather_evidence),
         ("plan_work", plan_work),
         ("execute_task", execute_task),
         ("case_tools", case_tools),
@@ -573,8 +645,9 @@ def build_graph(
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "triage")
     builder.add_conditional_edges(
-        "triage", route_after_triage, ["plan_work", "human_review", "respond_directly"]
+        "triage", route_after_triage, ["plan_work", "gather_evidence", "respond_directly"]
     )
+    builder.add_edge("gather_evidence", "human_review")
     builder.add_conditional_edges("plan_work", fan_out_tasks, ["execute_task"])
     builder.add_edge("execute_task", "case_tools")
     builder.add_edge("case_tools", "compose_reply")

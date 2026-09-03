@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from pwc_support.domain.models import (
     ReviewDecision,
     ReviewRequest,
 )
+from pwc_support.storage.repositories import InboundRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +55,15 @@ class ClientSupportService:
         reviews: Any = None,
         database: Any = None,
         mailbox: Any = None,
+        review_service: Any = None,
     ) -> None:
         self.graph = graph
         self.reviews = reviews
         self.database = database
         self.mailbox = mailbox
+        self.review_service = review_service
+        self.inbound = InboundRepository(database) if database is not None else None
+        self._identity_runs: dict[tuple[str, str], WorkflowRun] = {}
 
     def submit(
         self,
@@ -68,10 +74,16 @@ class ClientSupportService:
         conversation_id: UUID | None = None,
         thread_id: str | None = None,
         subject: str | None = None,
+        provider_message_id: str | None = None,
     ) -> WorkflowRun:
         conversation = conversation_id or uuid4()
         run_id = uuid4()
         thread = thread_id or str(conversation)
+        provider = "local_chat" if channel is Channel.CHAT else "simulated_email"
+        identity = provider_message_id or f"message-{uuid4()}"
+        cached = self._identity_runs.get((provider, identity))
+        if cached is not None:
+            return cached
         # Each enquiry gets its own checkpoint namespace. Sharing one across a
         # conversation would replay and accumulate the previous enquiry's state.
         checkpoint_id = f"run-{run_id}"
@@ -94,13 +106,21 @@ class ClientSupportService:
             },
             config,
         )
-        return self._finish(
+        result = self._finish(
             state,
             conversation=conversation,
             run_id=run_id,
             thread_id=thread,
             checkpoint_id=checkpoint_id,
         )
+        self._identity_runs[(provider, identity)] = result
+        if self.inbound is not None:
+            claim = self.inbound.claim(
+                provider, identity, str(hash(body)), lease_seconds=300, now=datetime.now(UTC)
+            ).claim
+            if claim is not None:
+                self.inbound.complete(claim, result.outcome.model_dump(mode="json"))
+        return result
 
     def resume(self, *, checkpoint_id: str, decision: ReviewDecision) -> WorkflowRun:
         """Resume the checkpointed run that paused for a specialist decision."""
@@ -123,6 +143,13 @@ class ClientSupportService:
     def pending_reviews(self) -> list[ReviewRequest]:
         return [] if self.reviews is None else list(self.reviews.list_pending())
 
+    def decide_review(self, **kwargs: Any) -> Any:
+        if self.review_service is not None:
+            return self.review_service.decide(**kwargs)
+        if self.reviews is None:
+            raise RuntimeError("review persistence is not configured")
+        return self.reviews.decide(**kwargs)
+
     def _finish(
         self,
         state: dict[str, Any],
@@ -138,8 +165,8 @@ class ClientSupportService:
             review_request = _interrupt_payload(interrupts)
         events = list(state.get("events", []))
         self._persist_events(events, conversation=conversation, run_id=run_id)
-        if interrupts and review_request is not None:
-            self._persist_review(review_request, run_id=run_id)
+        if review_request is not None and (interrupts or str(state.get("outcome", {}).get("status")) == OutcomeStatus.PENDING_REVIEW.value):
+            self._persist_review(review_request, run_id=run_id, checkpoint_id=checkpoint_id)
             outcome = ClientOutcome(
                 conversation_id=conversation,
                 case_id=review_request.get("case_id"),
@@ -154,7 +181,7 @@ class ClientSupportService:
                 outcome=outcome,
                 thread_id=thread_id,
                 checkpoint_id=checkpoint_id,
-                interrupted=True,
+                interrupted=bool(interrupts),
                 review_request=review_request,
                 events=events,
                 tool_calls=list(state.get("tool_calls", [])),
@@ -207,7 +234,9 @@ class ClientSupportService:
                 )
             )
 
-    def _persist_review(self, request: dict[str, Any], *, run_id: UUID) -> None:
+    def _persist_review(
+        self, request: dict[str, Any], *, run_id: UUID, checkpoint_id: str
+    ) -> None:
         if self.reviews is None:
             return
         self.reviews.create(
@@ -219,6 +248,11 @@ class ClientSupportService:
                     ReviewCategory(category) for category in request.get("categories", [])
                 ),
                 original_message=str(request.get("original_message", "")),
+                evidence=tuple(
+                    Citation.model_validate(item) for item in request.get("evidence", [])
+                ),
+                # Stored so a later session can resume this paused run from the queue.
+                checkpoint_id=checkpoint_id,
                 response_version=int(request.get("response_version", 1)),
             )
         )
