@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -69,6 +70,10 @@ class ReviewDecisionKind(StrEnum):
     TAKE_OWNERSHIP = "take_ownership"
 
 
+class DomainModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class CaseStatus(StrEnum):
     OPEN = "open"
     PENDING_REVIEW = "pending_review"
@@ -79,8 +84,59 @@ class CaseStatus(StrEnum):
     DELIVERY_FAILED = "delivery_failed"
 
 
-class DomainModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class RetailIntent(StrEnum):
+    PRODUCT_SEARCH = "product_search"
+    PRODUCT_RECOMMENDATION = "product_recommendation"
+    ORDER_STATUS = "order_status"
+    RETURN_REQUEST = "return_request"
+    REFUND_REQUEST = "refund_request"
+    GENERAL_POLICY = "general_policy"
+
+
+class RetailActionRisk(StrEnum):
+    NONE = "none"
+    FINANCIAL = "financial"
+    IRREVERSIBLE = "irreversible"
+    FRAUD_SUSPECTED = "fraud_suspected"
+    POLICY_EXCEPTION = "policy_exception"
+
+
+class ProductSummary(DomainModel):
+    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    name: str
+    category: str
+    price: Decimal = Field(ge=0)
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    stock: int = Field(ge=0)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    active_offer: dict[str, Any] | None = None
+
+
+class OrderSummary(DomainModel):
+    order_id: str
+    customer_id: str
+    status: str
+    total: Decimal = Field(ge=0)
+    currency: str = "EUR"
+    items: tuple[dict[str, Any], ...] = ()
+    delivered_at: datetime | None = None
+
+
+class ReturnEligibility(DomainModel):
+    eligible: bool
+    reason: str
+    deadline: datetime | None = None
+    refund_amount: Decimal = Field(ge=0)
+    risk_flags: tuple[RetailActionRisk, ...] = ()
+
+
+class ReturnRequest(DomainModel):
+    return_id: str
+    order_id: str
+    item_id: str
+    reason: str
+    status: str
+    idempotency_key: str
 
 
 class SemanticRiskRoute(StrEnum):

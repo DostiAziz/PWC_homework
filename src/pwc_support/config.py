@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
@@ -39,6 +40,9 @@ class Settings(BaseModel):
     semantic_classifier_taxonomy_version: str = "v1"
     semantic_classifier_schema_version: str = "v1"
     semantic_classifier_retry_count: int = Field(default=1, ge=0, le=2)
+    retail_db_path: Path | None = None
+    refund_auto_approval_limit: Decimal = Field(default=Decimal("100.00"), ge=0)
+    return_window_days: int = Field(default=30, ge=1, le=365)
 
     @property
     def operations_db(self) -> Path:
@@ -72,6 +76,8 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def protect_mac_profile(self) -> Settings:
+        if self.retail_db_path is None:
+            object.__setattr__(self, "retail_db_path", self.data_dir / "state" / "retail.sqlite3")
         if self.max_parallel_generations > 1 and self.num_ctx > 8192:
             raise ValueError("parallel generation above one requires num_ctx <= 8192")
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
