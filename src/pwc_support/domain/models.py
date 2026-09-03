@@ -44,6 +44,9 @@ class ReviewCategory(StrEnum):
     EXTERNAL_ACTION = "external_action"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     PROFESSIONAL_JUDGEMENT = "professional_judgement"
+    OTHER_SENSITIVE_RISK = "other_sensitive_risk"
+    CONFLICTING_EVIDENCE = "conflicting_evidence"
+    CITATION_VERIFICATION_FAILURE = "citation_verification_failure"
 
 
 class TaskKind(StrEnum):
@@ -58,6 +61,7 @@ class TaskStatus(StrEnum):
 
 
 class ReviewDecisionKind(StrEnum):
+    SEND_RESPONSE = "send_response"
     APPROVE = "approve"
     EDIT = "edit"
     REJECT = "reject"
@@ -71,10 +75,76 @@ class CaseStatus(StrEnum):
     RESOLVED = "resolved"
     HUMAN_OWNED = "human_owned"
     REJECTED = "rejected"
+    DELIVERY_PENDING = "delivery_pending"
+    DELIVERY_FAILED = "delivery_failed"
 
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class SemanticRiskRoute(StrEnum):
+    ROUTINE = "routine"
+    REVIEW = "review"
+    UNCERTAIN = "uncertain"
+
+
+class SemanticRiskDecision(DomainModel):
+    route: SemanticRiskRoute
+    categories: frozenset[ReviewCategory] = frozenset()
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    justification: Annotated[str, StringConstraints(max_length=400)] = ""
+
+    @model_validator(mode="after")
+    def validate_categories(self) -> SemanticRiskDecision:
+        if self.route is SemanticRiskRoute.ROUTINE and self.categories:
+            raise ValueError("routine semantic results cannot contain categories")
+        review_routes = (SemanticRiskRoute.REVIEW, SemanticRiskRoute.UNCERTAIN)
+        if self.route in review_routes and not self.categories:
+            raise ValueError("review and uncertain semantic results require categories")
+        return self
+
+
+class RoutingSnapshot(DomainModel):
+    input_fingerprint: str
+    provider_message_id: str
+    policy_version: str
+    deterministic_match: bool
+    matched_rule_ids: tuple[str, ...] = ()
+    classifier_invoked: bool = False
+    classifier_attempts: int = Field(default=0, ge=0, le=2)
+    classifier: SemanticRiskDecision | None = None
+    classifier_model: str | None = None
+    classifier_prompt_version: str | None = None
+    classifier_taxonomy_version: str | None = None
+    classifier_schema_version: str | None = None
+    failure_class: str | None = None
+    pre_retrieval_route: str
+    snapshot_hash: str
+
+
+class FinalRoutingOutcome(DomainModel):
+    pre_retrieval_snapshot_hash: str
+    final_route: str
+    categories: frozenset[ReviewCategory] = frozenset()
+    post_retrieval_gate: str | None = None
+    failure_class: str | None = None
+
+
+class InboundClaim(DomainModel):
+    provider: str
+    provider_message_id: str
+    payload_hash: str
+    claim_token: str
+    lease_expires_at: datetime
+    attempt_count: int = Field(ge=1)
+
+
+class MessageKind(StrEnum):
+    AUTOMATIC_ANSWER = "automatic_answer"
+    CASE_ACKNOWLEDGEMENT = "case_acknowledgement"
+    REVIEWED_RESPONSE = "reviewed_response"
+    SERVICE_FAILURE = "service_failure"
 
 
 class IncomingMessage(DomainModel):
@@ -168,6 +238,59 @@ class EvidenceBundle(DomainModel):
     used_filter_fallback: bool = False
 
 
+class EscalationIntent(DomainModel):
+    inbound_message_id: str
+    categories: frozenset[ReviewCategory]
+    original_enquiry: str
+    evidence_state: Literal["selected", "insufficient", "conflicting", "unavailable"]
+    evidence: EvidenceBundle
+    delivery_recipient: str
+    delivery_thread_id: str
+    routing_provenance: RoutingSnapshot
+
+
+class OutboundMessage(DomainModel):
+    delivery_key: str
+    kind: MessageKind
+    case_id: str | None = None
+    response_version: int | None = None
+    recipient: str
+    thread_id: str
+    subject: str
+    body: str
+    payload_hash: str
+
+    @model_validator(mode="after")
+    def validate_reviewed_response(self) -> OutboundMessage:
+        if self.kind is MessageKind.REVIEWED_RESPONSE:
+            if self.case_id is None or self.response_version is None:
+                raise ValueError("reviewed responses require case_id and response_version")
+        elif self.response_version is not None:
+            raise ValueError("response_version is only valid for reviewed responses")
+        return self
+
+
+class DeliveryReceipt(DomainModel):
+    delivery_key: str
+    provider_message_id: str
+    delivered_at: datetime
+
+
+class InboundClaimResult(DomainModel):
+    status: Literal["claimed", "completed", "in_progress", "duplicate"]
+    claim: InboundClaim | None = None
+    outcome: ClientOutcome | None = None
+
+
+class ReviewDecisionResult(DomainModel):
+    decision_id: UUID
+    review_id: UUID
+    kind: ReviewDecisionKind
+    case_status: CaseStatus
+    outbox_key: str | None = None
+    replayed: bool = False
+
+
 class PlannedTask(DomainModel):
     task_id: str
     kind: TaskKind
@@ -228,6 +351,12 @@ class CaseRecord(DomainModel):
     status: CaseStatus
     summary: str
     version: int = Field(ge=1)
+    delivery_recipient: str | None = None
+    delivery_thread_id: str | None = None
+    assigned_reviewer: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    delivery_status: CaseStatus | None = None
 
 
 class CaseLookupResult(DomainModel):
@@ -258,6 +387,12 @@ class ReviewRequest(DomainModel):
     checkpoint_id: str | None = None
     response_version: int = Field(ge=1)
     status: Literal["pending", "decided"] = "pending"
+    evidence_state: Literal["selected", "insufficient", "conflicting", "unavailable"] = "selected"
+    routing_provenance: RoutingSnapshot | None = None
+    delivery_recipient: str | None = None
+    delivery_thread_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class ReviewDecision(DomainModel):
@@ -267,11 +402,17 @@ class ReviewDecision(DomainModel):
     response_version: int = Field(ge=1)
     edited_text: str | None = None
     note: Annotated[str, StringConstraints(max_length=1000)] = ""
+    response_text: Annotated[str, StringConstraints(max_length=1500)] | None = None
+    reason: Annotated[str, StringConstraints(max_length=1000)] | None = None
 
     @model_validator(mode="after")
     def validate_edit(self) -> ReviewDecision:
         if self.kind is ReviewDecisionKind.EDIT and not self.edited_text:
             raise ValueError("edited_text is required for edit")
+        if self.kind is ReviewDecisionKind.SEND_RESPONSE and not self.response_text:
+            raise ValueError("response_text is required for send_response")
+        if self.kind is not ReviewDecisionKind.SEND_RESPONSE and self.response_text is not None:
+            raise ValueError("response_text is only valid for send_response")
         return self
 
 
