@@ -161,6 +161,8 @@ def render_client_chat(service: ClientSupportService) -> None:
             st.write(entry["content"])
             if entry.get("status"):
                 st.caption(f"Status: {entry['status']}")
+            if entry.get("case_id"):
+                st.info(f"Case ID: {entry['case_id']} - awaiting specialist review")
             render_citations(entry.get("citations", []))
             if entry.get("run") is not None:
                 render_run_details(entry["run"])
@@ -180,6 +182,7 @@ def render_client_chat(service: ClientSupportService) -> None:
             "role": "assistant",
             "content": run.outcome.message,
             "status": run.outcome.status.value,
+            "case_id": run.outcome.case_id,
             "citations": [citation.model_dump(mode="json") for citation in run.outcome.citations],
             "run": run,
         }
