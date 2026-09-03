@@ -240,7 +240,7 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
             st.write(message.body)
 
 
-def render_review(service: ClientSupportService) -> None:
+def render_review(service: ClientSupportService, dispatcher: Any | None = None) -> None:
     st.subheader("Pending specialist reviews")
     st.caption("Reviews are durable SQLite cases. Decisions are applied asynchronously and delivered through the simulated mailbox.")
     pending = service.pending_reviews()
@@ -248,10 +248,10 @@ def render_review(service: ClientSupportService) -> None:
         st.info("No pending reviews. Sensitive enquiries appear here as soon as they pause.")
         return
     for review in pending:
-        _render_review_card(service, review)
+        _render_review_card(service, review, dispatcher)
 
 
-def _render_review_card(service: ClientSupportService, review: ReviewRequest) -> None:
+def _render_review_card(service: ClientSupportService, review: ReviewRequest, dispatcher: Any | None = None) -> None:
     key = str(review.review_id)
     with st.container(border=True):
         st.markdown(f"**Case {review.case_id}** · review `{key[:8]}`")
@@ -297,6 +297,8 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest) ->
                 reviewed_text=edited or None,
                 reason="reviewer decision",
             )
+            if dispatcher is not None and result.outbox_key:
+                dispatcher.dispatch_once(worker_id="streamlit-reviewer")
             st.success(f"Decision recorded: {result.case_status.value}")
             st.rerun()
 
@@ -347,4 +349,4 @@ with client_tab:
 with email_tab:
     render_email(service, application.runtime)
 with review_tab:
-    render_review(service)
+    render_review(service, runtime.dispatcher)
