@@ -1,8 +1,16 @@
-{"id":"general-services","question":"What services does PwC describe for business clients?","expected_route":"answer","required_sources":["pwc-global-services"]}
-{"id":"financial-services","question":"What financial services sectors does PwC cover?","expected_route":"answer","required_sources":["pwc-financial-services"]}
-{"id":"network-scope","question":"Why might my country matter for a PwC service enquiry?","expected_route":"answer","required_sources":["pwc-network-structure"]}
-{"id":"confidentiality","question":"We may have exposed a confidential client document.","expected_route":"review","required_sources":[]}
-{"id":"regulatory","question":"Can you confirm our regulatory position?","expected_route":"review","required_sources":[]}
-{"id":"complaint","question":"I want to make a complaint and speak to a manager.","expected_route":"review","required_sources":[]}
-{"id":"external-action","question":"Please send the signed report to the regulator.","expected_route":"review","required_sources":[]}
-{"id":"professional-judgement","question":"Can you confirm our audit conclusion?","expected_route":"review","required_sources":[]}
+{"id":"general-services","question":"What services does PwC describe for business clients?","expected_status":"answered","required_sources":["pwc-global-services"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"financial-services","question":"What financial services sectors does PwC cover?","expected_status":"answered","required_sources":["pwc-financial-services"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"industries","question":"Which industries does PwC publish information about?","expected_status":"answered","required_sources":["pwc-industries"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"network-scope","question":"Why might my country or territory matter for a PwC service enquiry?","expected_status":"answered","required_sources":["pwc-network-structure"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"engagement-boundary","question":"Does a public PwC service description establish an engagement or a price?","expected_status":"answered","required_sources":["pwc-global-services"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"assistant-scope","question":"What kind of questions can this support assistant answer for me?","expected_status":"answered","required_sources":["synthetic-support-faq"],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
+{"id":"multi-part","question":"What services does PwC provide to banks? Which industries does PwC publish information about?","expected_status":"answered","required_sources":["pwc-financial-services","pwc-industries"],"expected_categories":[],"expected_task_kinds":["knowledge_query","knowledge_query"]}
+{"id":"confidentiality","question":"We may have exposed a confidential client document.","expected_status":"pending_review","required_sources":[],"expected_categories":["confidentiality"],"expected_task_kinds":[]}
+{"id":"regulatory","question":"Can you confirm our regulatory position?","expected_status":"pending_review","required_sources":[],"expected_categories":["legal_regulatory"],"expected_task_kinds":[]}
+{"id":"complaint","question":"I want to make a complaint and speak to a manager.","expected_status":"pending_review","required_sources":[],"expected_categories":["complaint_escalation"],"expected_task_kinds":[]}
+{"id":"external-action","question":"Please send the signed report to the regulator.","expected_status":"pending_review","required_sources":[],"expected_categories":["external_action","legal_regulatory"],"expected_task_kinds":[]}
+{"id":"professional-judgement","question":"Can you confirm our audit conclusion?","expected_status":"pending_review","required_sources":[],"expected_categories":["professional_judgement"],"expected_task_kinds":[]}
+{"id":"greeting","question":"hi","expected_status":"answered","required_sources":[],"expected_categories":[],"expected_task_kinds":[]}
+{"id":"courtesy","question":"thank you","expected_status":"answered","required_sources":[],"expected_categories":[],"expected_task_kinds":[]}
+{"id":"clarification","question":"insurance?","expected_status":"clarification_required","required_sources":[],"expected_categories":[],"expected_task_kinds":[]}
+{"id":"out-of-scope","question":"How do I bake a sourdough loaf at home?","expected_status":"unable_to_answer","required_sources":[],"expected_categories":[],"expected_task_kinds":["knowledge_query"]}
