@@ -8,6 +8,8 @@ from pwc_support.domain.models import (
     CaseRecord,
     CaseRequest,
     CaseStatus,
+    DraftReply,
+    ProposedAction,
     ReviewRequest,
 )
 from pwc_support.storage.database import Database, json_object
@@ -47,10 +49,29 @@ class CaseRepository:
         return self.get(case_id)
 
     def get(self, case_id: str) -> CaseRecord:
+        record = self.find(case_id)
+        if record is None:
+            raise KeyError(case_id)
+        return record
+
+    def find(self, case_id: str) -> CaseRecord | None:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
-        if row is None:
+        return None if row is None else self._from_row(row)
+
+    def update_status(self, case_id: str, status: CaseStatus) -> CaseRecord:
+        """Advance a case and bump its optimistic-concurrency version."""
+        with self.database.connect() as connection:
+            updated = connection.execute(
+                "UPDATE cases SET status = ?, version = version + 1 WHERE case_id = ?",
+                (status.value, case_id),
+            ).rowcount
+        if not updated:
             raise KeyError(case_id)
+        return self.get(case_id)
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> CaseRecord:
         return CaseRecord(
             case_id=row["case_id"],
             conversation_id=UUID(row["conversation_id"]),
@@ -95,6 +116,13 @@ class ReviewRepository:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    def find(self, review_id: UUID) -> ReviewRequest | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM review_requests WHERE review_id = ?", (str(review_id),)
+            ).fetchone()
+        return None if row is None else self._from_row(row)
+
     def mark_decided(self, review_id: UUID) -> None:
         with self.database.connect() as connection:
             connection.execute(
@@ -104,12 +132,22 @@ class ReviewRepository:
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> ReviewRequest:
+        proposed_reply_json = row["proposed_reply_json"]
         return ReviewRequest(
             review_id=UUID(row["review_id"]),
             case_id=row["case_id"],
             run_id=UUID(row["run_id"]),
             categories=frozenset(json.loads(row["categories_json"])),
             original_message=row["original_message"],
+            proposed_reply=(
+                DraftReply.model_validate_json(proposed_reply_json)
+                if proposed_reply_json
+                else None
+            ),
+            proposed_actions=tuple(
+                ProposedAction.model_validate(item)
+                for item in json.loads(row["proposed_actions_json"])
+            ),
             response_version=row["response_version"],
             status=row["status"],
         )
