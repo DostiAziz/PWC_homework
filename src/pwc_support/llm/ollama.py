@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -26,13 +28,40 @@ class OllamaGenerator:
         self.model = model
         self.temperature = temperature
 
-    def structured(self, *, system: str, user: str, schema: type[ModelT]) -> ModelT:
-        response = self.client.chat(
-            model=self.model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            format=schema.model_json_schema(),
-            options={"temperature": self.temperature},
-        )
+    def structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[ModelT],
+        temperature: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> ModelT:
+        selected_temperature = self.temperature if temperature is None else temperature
+
+        def request() -> Any:
+            return self.client.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                format=schema.model_json_schema(),
+                options={"temperature": selected_temperature},
+            )
+
+        if timeout_seconds is None:
+            response = request()
+        else:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ollama-structured")
+            future = executor.submit(request)
+            try:
+                response = future.result(timeout=timeout_seconds)
+            except FutureTimeoutError as error:
+                future.cancel()
+                raise TimeoutError("structured Ollama request timed out") from error
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         content = response["message"]["content"]
         return schema.model_validate(json.loads(content))
 
