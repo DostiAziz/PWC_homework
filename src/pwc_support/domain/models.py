@@ -156,6 +156,18 @@ class RagResult(DomainModel):
     evidence_conflict: bool = False
 
 
+class EvidenceBundle(DomainModel):
+    """Sources retrieved for a specialist to read, with no generated reply.
+
+    The escalation path retrieves evidence but never asks the model to draft an answer,
+    so this carries the selected sources on their own.
+    """
+
+    citations: tuple[Citation, ...] = ()
+    hits: tuple[RetrievalHit, ...] = ()
+    used_filter_fallback: bool = False
+
+
 class PlannedTask(DomainModel):
     task_id: str
     kind: TaskKind
@@ -238,6 +250,9 @@ class ReviewRequest(DomainModel):
     original_message: str
     proposed_reply: DraftReply | None = None
     proposed_actions: tuple[ProposedAction, ...] = ()
+    # Background sources retrieved for the specialist. Empty when the enquiry was
+    # escalated after drafting, because the draft carries its own citations.
+    evidence: tuple[Citation, ...] = ()
     response_version: int = Field(ge=1)
     status: Literal["pending", "decided"] = "pending"
 

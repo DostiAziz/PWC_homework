@@ -5,7 +5,7 @@ from langgraph.types import Command
 
 from pwc_support.storage.checkpoints import sqlite_checkpointer
 from pwc_support.workflow.graph import build_graph
-from tests.fakes import fake_rag_answerer, fake_toolbox
+from tests.fakes import FakeGenerator, fake_rag_answerer, fake_toolbox
 
 
 def test_sensitive_case_pauses_and_resumes_after_review() -> None:
@@ -57,6 +57,31 @@ def test_sqlite_checkpoints_survive_a_restarted_process(tmp_path: Path) -> None:
 
     assert resumed["outcome"]["status"] == "pending_review"
     assert resumed["review_decision"]["kind"] == "approve"
+
+
+def test_escalation_gives_the_specialist_evidence_but_never_a_generated_draft() -> None:
+    generator = FakeGenerator()
+    graph = build_graph(
+        rag_answerer=fake_rag_answerer(generator=generator),
+        toolbox=fake_toolbox(),
+        enable_interrupt=True,
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "evidence-thread-1"}}
+
+    paused = graph.invoke(
+        {"message": {"body": "Our confidential PwC advisory report may have leaked."}}, config
+    )
+
+    request = paused["__interrupt__"][0].value
+    assert request["categories"] == ["confidentiality"]
+    # The specialist opens the review with sources already retrieved...
+    assert [citation["source_id"] for citation in request["evidence"]] == [
+        "pwc-global-services"
+    ]
+    # ...but the model was never asked to write anything about a sensitive enquiry.
+    assert generator.calls == []
+    assert "gather_evidence" in [event["node"] for event in paused["events"]]
 
 
 def test_requesting_a_revision_never_approves_the_draft_it_rejected() -> None:
