@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -151,6 +152,14 @@ def render_citations(citations: list[dict[str, Any]]) -> None:
             st.caption(citation["excerpt"][:300])
 
 
+def _cited_sources(citations: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """Limit the client source panel to markers actually used in the answer."""
+    markers = set(re.findall(r"\[S\d+\]", text))
+    if not markers:
+        return citations
+    return [citation for citation in citations if citation.get("marker") in markers]
+
+
 def render_client_chat(service: ClientSupportService) -> None:
     st.caption(
         "Ask a general question about publicly described PwC services. Answers are grounded "
@@ -163,7 +172,7 @@ def render_client_chat(service: ClientSupportService) -> None:
                 st.caption(f"Status: {entry['status']}")
             if entry.get("case_id"):
                 st.info(f"Case ID: {entry['case_id']} - awaiting specialist review")
-            render_citations(entry.get("citations", []))
+            render_citations(_cited_sources(entry.get("citations", []), entry["content"]))
             if entry.get("run") is not None:
                 render_run_details(entry["run"])
 
@@ -212,7 +221,12 @@ def render_email(service: ClientSupportService, runtime: Runtime) -> None:
             )
         st.success(f"Status: {run.outcome.status.value}")
         st.write(run.outcome.message)
-        render_citations([citation.model_dump(mode="json") for citation in run.outcome.citations])
+        render_citations(
+            _cited_sources(
+                [citation.model_dump(mode="json") for citation in run.outcome.citations],
+                run.outcome.message,
+            )
+        )
         render_run_details(run)
 
     outbox = runtime.mailbox.outbox()
