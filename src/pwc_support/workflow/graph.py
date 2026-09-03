@@ -159,7 +159,7 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
-        retail_lookup = any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer"))
+        retail_lookup = any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer", "order"))
         retail_action = any(word in body.casefold() for word in ("return", "refund", "send back"))
         if retail_lookup and not retail_action and not decision.requires_review:
             route = Route.PLAN
@@ -231,11 +231,11 @@ def build_graph(
         """
         started = time.perf_counter()
         body = str(state["message"]["body"])
-        if retail_tools and any(word in body.casefold() for word in ("return", "refund")) and len(retail_tools) > 3:
+        if retail_tools and any(word in body.casefold() for word in ("return", "refund")) and len(retail_tools) > 5:
             order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
             item_match = re.search(r"\bITEM-[A-Z0-9-]+\b", body, re.IGNORECASE)
             if order_match and item_match:
-                action = retail_tools[3].invoke({
+                action = retail_tools[5].invoke({
                     "order_id": order_match.group(0).upper(),
                     "item_id": item_match.group(0).upper(),
                     "reason": body,
@@ -260,6 +260,14 @@ def build_graph(
     def plan_work(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         body = str(state["message"]["body"])
+        if retail_tools and re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE) and "order" in body.casefold():
+            order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
+            assert order_match is not None
+            order_id = order_match.group(0).upper()
+            result = retail_tools[4].invoke({"order_id": order_id, "customer_id": str(state.get("client_id") or "")})
+            order = result.get("order") if isinstance(result, dict) else None
+            answer = f"Order {order_id}: {order['status']}" if order else f"Order {order_id} was not found for this customer."
+            return {"plan": {"tasks": []}, "expected_task_ids": [], "retail_intent": "order_status", "retail_answer": answer, "events": [_event("plan_work", "retail_order_lookup", started, found=bool(order))]}
         if retail_tools and any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer")):
             query = next((word for word in ("jacket", "backpack", "headphones", "offer", "product") if word in body.casefold()), body)
             result = retail_tools[0].invoke({"query": query})
@@ -293,7 +301,7 @@ def build_graph(
 
     def fan_out_tasks(state: SupportState) -> list[Send] | str:
         """Dispatch every planned task to an independent worker in one superstep."""
-        if state.get("retail_intent") == "product_search":
+        if state.get("retail_intent") in {"product_search", "order_status"}:
             return "compose_reply"
         return [
             Send(
@@ -425,7 +433,7 @@ def build_graph(
 
     def compose_reply(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
-        if state.get("retail_intent") == "product_search":
+        if state.get("retail_intent") in {"product_search", "order_status"}:
             return {
                 "draft": {"text": str(state.get("retail_answer", "No matching products found.")), "citation_markers": [], "citations": [], "response_version": 1, "source": "system"},
                 "events": [_event("compose_reply", "retail", started)],
@@ -462,7 +470,7 @@ def build_graph(
         draft = state.get("draft", {})
         text = str(draft.get("text", ""))
         citations = draft.get("citations", [])
-        if state.get("retail_intent") == "product_search":
+        if state.get("retail_intent") in {"product_search", "order_status"}:
             verification = Verification(route="release", reason="Structured product facts supplied by database tool")
             return {"verification": verification.model_dump(mode="json"), "events": [_event("verify_response", "release", started, citations=0)]}
         known = {str(citation["marker"]) for citation in citations}

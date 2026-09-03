@@ -46,3 +46,11 @@ def test_graph_answers_product_question_without_case(tmp_path: Path) -> None:
     assert result["outcome"]["status"] == "answered"
     assert "Trail Jacket" in result["delivery"]["message"]
     assert result["outcome"].get("case_id") is None
+
+
+def test_graph_answers_scoped_order_status_from_database(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    tools = build_retail_tools(ProductRepository(db), OrderRepository(db), "CUS-1", ReturnRepository(db))
+    result = build_graph(retail_tools=tools).invoke({"message": {"body": "What is the status of order ORD-1?", "sender_id": "CUS-1"}})
+    assert result["outcome"]["status"] == "answered"
+    assert "delivered" in result["delivery"]["message"]

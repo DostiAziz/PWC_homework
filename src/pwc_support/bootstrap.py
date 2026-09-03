@@ -88,6 +88,7 @@ def build_runtime(
         checkpointer=checkpointer,
         max_planned_tasks=resolved.max_planned_tasks,
     )
+    dispatcher = OutboxDispatcher(OutboxRepository(database), MailboxRepository(database), cases)
     return Runtime(
         settings=resolved,
         graph=graph,
@@ -96,6 +97,6 @@ def build_runtime(
         reviews=reviews,
         mailbox=mailbox,
         knowledge_base=knowledge_base,
-        review_service=ReviewService(reviews),
-        dispatcher=OutboxDispatcher(OutboxRepository(database), MailboxRepository(database)),
+        review_service=ReviewService(reviews, dispatcher),
+        dispatcher=dispatcher,
     )

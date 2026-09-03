@@ -26,12 +26,12 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE TABLE IF NOT EXISTS return_requests (
     return_id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(order_id), item_id TEXT NOT NULL,
     reason TEXT NOT NULL, status TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS refund_requests (
     refund_id TEXT PRIMARY KEY, return_id TEXT NOT NULL REFERENCES return_requests(return_id),
     amount NUMERIC NOT NULL CHECK(amount >= 0), status TEXT NOT NULL, payment_reference TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS retail_audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, entity_id TEXT NOT NULL,

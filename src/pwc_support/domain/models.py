@@ -68,6 +68,11 @@ class ReviewDecisionKind(StrEnum):
     REJECT = "reject"
     REQUEST_REVISION = "request_revision"
     TAKE_OWNERSHIP = "take_ownership"
+    APPROVE_REFUND = "approve_refund"
+    REJECT_REFUND = "reject_refund"
+    APPROVE_RETURN = "approve_return"
+    REQUEST_INFORMATION = "request_information"
+    OFFER_REPLACEMENT = "offer_replacement"
 
 
 class DomainModel(BaseModel):

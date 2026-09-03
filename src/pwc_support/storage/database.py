@@ -181,6 +181,8 @@ class Database:
                 "updated_at",
             ):
                 self._add_missing_column(connection, "review_requests", column, "TEXT")
+            self._add_missing_column(connection, "return_requests", "version", "INTEGER NOT NULL DEFAULT 1")
+            self._add_missing_column(connection, "refund_requests", "version", "INTEGER NOT NULL DEFAULT 1")
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_cases_inbound_message

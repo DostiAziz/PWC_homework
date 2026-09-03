@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from pwc_support.domain.models import DeliveryReceipt, ReviewDecisionKind, ReviewDecisionResult
-from pwc_support.storage.repositories import MailboxRepository, OutboxRepository, ReviewRepository
+from pwc_support.domain.models import CaseStatus, DeliveryReceipt, ReviewDecisionKind, ReviewDecisionResult
+from pwc_support.storage.repositories import CaseRepository, MailboxRepository, OutboxRepository, ReviewRepository
 
 
 class ReviewService:
-    def __init__(self, reviews: ReviewRepository) -> None:
+    def __init__(self, reviews: ReviewRepository, dispatcher: OutboxDispatcher | None = None) -> None:
         self.reviews = reviews
+        self.dispatcher = dispatcher
 
     def decide(
         self,
@@ -24,7 +25,7 @@ class ReviewService:
     ) -> ReviewDecisionResult:
         if kind is ReviewDecisionKind.SEND_RESPONSE and not (reviewed_text or "").strip():
             raise ValueError("reviewed_text is required when sending a response")
-        return self.reviews.decide(
+        result = self.reviews.decide(
             review_id=review_id,
             decision_id=decision_id,
             expected_version=expected_version,
@@ -33,12 +34,16 @@ class ReviewService:
             reviewed_text=reviewed_text,
             reason=reason,
         )
+        if self.dispatcher is not None and result.outbox_key:
+            self.dispatcher.dispatch_once(worker_id="review-service")
+        return result
 
 
 @dataclass(slots=True)
 class OutboxDispatcher:
     outbox: OutboxRepository
     mailbox: MailboxRepository
+    cases: CaseRepository | None = None
 
     def dispatch_once(self, *, worker_id: str) -> DeliveryReceipt | None:
         from datetime import UTC, datetime
@@ -52,4 +57,6 @@ class OutboxDispatcher:
             self.outbox.mark_failed(message.delivery_key, str(exc))
             raise
         self.outbox.mark_sent(message.delivery_key, receipt)
+        if self.cases is not None and message.case_id:
+            self.cases.update_status(message.case_id, CaseStatus.RESOLVED)
         return receipt

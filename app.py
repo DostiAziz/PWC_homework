@@ -161,6 +161,7 @@ def _cited_sources(citations: list[dict[str, Any]], text: str) -> list[dict[str,
 
 
 def render_client_chat(service: ClientSupportService) -> None:
+    render_retail_workspace(service)
     st.caption(
         "Ask a general question about publicly described PwC services. Answers are grounded "
         "in the local corpus and cited; sensitive matters are routed to a specialist."
@@ -197,6 +198,48 @@ def render_client_chat(service: ClientSupportService) -> None:
         }
     )
     st.rerun()
+
+
+def render_retail_workspace(service: ClientSupportService) -> None:
+    """Provide explicit demo forms for bounded retail operations."""
+    with st.expander("Retail self-service", expanded=False):
+        product_tab, recommendation_tab, order_tab, return_tab = st.tabs(["Products", "Recommendations", "Order status", "Return/refund"])
+        with product_tab:
+            with st.form("product-search-form"):
+                query = st.text_input("Product or category", value="jacket")
+                max_price = st.number_input("Maximum price (EUR)", min_value=0.0, value=200.0)
+                submitted = st.form_submit_button("Search products")
+            if submitted:
+                run = service.submit(body=f"Show products matching {query} under {max_price} EUR", client_id=st.session_state.client_id, conversation_id=st.session_state.conversation_id)
+                st.success(run.outcome.message)
+                for line in run.outcome.message.splitlines():
+                    if ":" in line:
+                        st.info(line)
+        with recommendation_tab:
+            with st.form("recommendation-form"):
+                need = st.text_input("What do you need?", value="waterproof jacket")
+                recommendation = st.form_submit_button("Find recommendations")
+            if recommendation:
+                run = service.submit(body=f"Recommend products for {need}", client_id=st.session_state.client_id, conversation_id=st.session_state.conversation_id)
+                st.success(run.outcome.message)
+        with order_tab:
+            with st.form("order-status-form"):
+                order_id = st.text_input("Order ID", value="ORD-1001")
+                lookup = st.form_submit_button("Check order")
+            if lookup:
+                run = service.submit(body=f"What is the status of order {order_id}?", client_id=st.session_state.client_id, conversation_id=st.session_state.conversation_id)
+                st.success(run.outcome.message)
+        with return_tab:
+            with st.form("return-form"):
+                return_order = st.text_input("Order ID", value="ORD-1001", key="return_order")
+                item_id = st.text_input("Item ID", value="ITEM-1001")
+                reason = st.text_input("Reason", value="wrong size")
+                request = st.form_submit_button("Request return or refund")
+            if request:
+                run = service.submit(body=f"I want a refund for {return_order} {item_id} because {reason}", client_id=st.session_state.client_id, conversation_id=st.session_state.conversation_id)
+                st.info(run.outcome.message)
+                if run.outcome.case_id:
+                    st.warning(f"Case ID: {run.outcome.case_id}. A specialist must approve this request.")
 
 
 def render_email(service: ClientSupportService, runtime: Runtime) -> None:
@@ -278,6 +321,11 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest, di
                 ReviewDecisionKind.SEND_RESPONSE.value,
                 ReviewDecisionKind.TAKE_OWNERSHIP.value,
                 ReviewDecisionKind.REJECT.value,
+                ReviewDecisionKind.APPROVE_REFUND.value,
+                ReviewDecisionKind.REJECT_REFUND.value,
+                ReviewDecisionKind.APPROVE_RETURN.value,
+                ReviewDecisionKind.REQUEST_INFORMATION.value,
+                ReviewDecisionKind.OFFER_REPLACEMENT.value,
             ],
             key=f"kind-{key}",
         )
@@ -307,7 +355,7 @@ def initialise_session() -> None:
     defaults: dict[str, Any] = {
         "messages": [],
         "conversation_id": uuid4(),
-        "client_id": "demo-client",
+        "client_id": "CUS-1001",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -349,4 +397,4 @@ with client_tab:
 with email_tab:
     render_email(service, application.runtime)
 with review_tab:
-    render_review(service, runtime.dispatcher)
+    render_review(service, application.runtime.dispatcher)

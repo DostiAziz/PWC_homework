@@ -24,6 +24,21 @@ class ProductRepository:
         with self.database.connect() as c:
             row = c.execute("SELECT * FROM products WHERE product_id=? AND active=1", (product_id,)).fetchone()
             return self._product(c, row) if row else None
+
+    def inventory(self, product_id: str, location: str | None = None) -> int:
+        query = "SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE product_id=?"
+        params: list[object] = [product_id]
+        if location:
+            query += " AND location=?"
+            params.append(location)
+        with self.database.connect() as c:
+            row = c.execute(query, params).fetchone()
+        return int(row["q"] if row else 0)
+
+    def offer(self, product_id: str) -> dict[str, object] | None:
+        with self.database.connect() as c:
+            row = c.execute("SELECT offer_id,description,discount_percent FROM offers WHERE product_id=? AND active=1 ORDER BY offer_id LIMIT 1", (product_id,)).fetchone()
+        return dict(row) if row else None
     def _product(self, c: object, row: sqlite3.Row) -> ProductSummary:
         quantity = 0
         with self.database.connect() as cx:
@@ -58,8 +73,20 @@ class ReturnRepository:
         with self.database.connect() as c:
             existing = c.execute("SELECT * FROM return_requests WHERE idempotency_key=?", (request.idempotency_key,)).fetchone()
             if existing: return ReturnRequest(return_id=existing["return_id"], order_id=existing["order_id"], item_id=existing["item_id"], reason=existing["reason"], status=existing["status"], idempotency_key=existing["idempotency_key"])
-            c.execute("INSERT INTO return_requests VALUES (?,?,?,?,?,?,?)", (request.return_id,request.order_id,request.item_id,request.reason,request.status,request.idempotency_key,datetime.now(UTC).isoformat()))
+            c.execute("INSERT INTO return_requests (return_id,order_id,item_id,reason,status,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?)", (request.return_id,request.order_id,request.item_id,request.reason,request.status,request.idempotency_key,datetime.now(UTC).isoformat()))
         return request
+
+    def transition(self, return_id: str, status: str, *, expected_version: int) -> ReturnRequest:
+        if status not in {"approved", "rejected", "needs_information"}:
+            raise ValueError("unsupported return status")
+        with self.database.connect() as c:
+            updated = c.execute("UPDATE return_requests SET status=?, version=version+1 WHERE return_id=? AND version=? AND status='pending_review'", (status, return_id, expected_version)).rowcount
+            if not updated:
+                raise ValueError("return version conflict")
+            row = c.execute("SELECT return_id,order_id,item_id,reason,status,idempotency_key FROM return_requests WHERE return_id=?", (return_id,)).fetchone()
+        if row is None:
+            raise KeyError(return_id)
+        return ReturnRequest(**dict(row))
 
 
 class RefundRepository:
@@ -68,11 +95,26 @@ class RefundRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def propose(self, return_request: ReturnRequest, amount: Decimal) -> dict[str, object]:
-        refund_id = f"REF-{return_request.return_id.removeprefix('RET-')}"
+    def propose(self, return_id: str, amount: Decimal | None = None) -> dict[str, object]:
+        refund_id = f"REF-{return_id.removeprefix('RET-')}"
         with self.database.connect() as c:
+            if amount is None:
+                row = c.execute("SELECT oi.unit_price FROM return_requests r JOIN order_items oi ON oi.item_id=r.item_id AND oi.order_id=r.order_id WHERE r.return_id=?", (return_id,)).fetchone()
+                if row is None:
+                    raise KeyError(return_id)
+                amount = Decimal(str(row["unit_price"]))
             c.execute(
                 "INSERT OR IGNORE INTO refund_requests (refund_id,return_id,amount,status,payment_reference,created_at) VALUES (?,?,?,?,?,?)",
-                (refund_id, return_request.return_id, str(amount), "pending_review", None, datetime.now(UTC).isoformat()),
+                (refund_id, return_id, str(amount), "pending_review", None, datetime.now(UTC).isoformat()),
             )
-        return {"refund_id": refund_id, "return_id": return_request.return_id, "amount": amount, "status": "pending_review"}
+        return {"refund_id": refund_id, "return_id": return_id, "amount": amount, "status": "pending_review", "version": 1}
+
+    def transition(self, refund_id: str, status: str, *, expected_version: int) -> dict[str, object]:
+        if status not in {"approved", "rejected"}:
+            raise ValueError("unsupported refund status")
+        with self.database.connect() as c:
+            updated = c.execute("UPDATE refund_requests SET status=?, version=version+1 WHERE refund_id=? AND version=? AND status='pending_review'", (status, refund_id, expected_version)).rowcount
+            if not updated:
+                raise ValueError("refund version conflict")
+            row = c.execute("SELECT refund_id,return_id,amount,status,version FROM refund_requests WHERE refund_id=?", (refund_id,)).fetchone()
+        return dict(row)
