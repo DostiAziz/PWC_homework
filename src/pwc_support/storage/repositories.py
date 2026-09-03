@@ -195,7 +195,7 @@ class ReviewRepository:
                     decision_id=UUID(existing["decision_id"]),
                     review_id=review_id,
                     kind=ReviewDecisionKind(existing["kind"]),
-                    case_status=CaseStatus.RESOLVED,
+                    case_status=CaseStatus.DELIVERY_PENDING if existing["kind"] in {ReviewDecisionKind.SEND_RESPONSE.value, ReviewDecisionKind.APPROVE.value, ReviewDecisionKind.APPROVE_REFUND.value, ReviewDecisionKind.APPROVE_RETURN.value, ReviewDecisionKind.OFFER_REPLACEMENT.value} else CaseStatus.REJECTED,
                     outbox_key=f"case:{row['case_id']}:response:{expected_version}",
                     replayed=True,
                 )
@@ -205,12 +205,9 @@ class ReviewRepository:
                 )
             now = datetime.now(UTC).isoformat()
             outbox_key = None
-            case_status = (
-                CaseStatus.RESOLVED
-                if kind in (ReviewDecisionKind.SEND_RESPONSE, ReviewDecisionKind.APPROVE)
-                else CaseStatus.REJECTED
-            )
-            if kind in (ReviewDecisionKind.SEND_RESPONSE, ReviewDecisionKind.APPROVE):
+            approving = kind in (ReviewDecisionKind.SEND_RESPONSE, ReviewDecisionKind.APPROVE, ReviewDecisionKind.APPROVE_REFUND, ReviewDecisionKind.APPROVE_RETURN, ReviewDecisionKind.OFFER_REPLACEMENT)
+            case_status = CaseStatus.DELIVERY_PENDING if approving else CaseStatus.REJECTED
+            if approving:
                 outbox_key = f"case:{row['case_id']}:response:{expected_version}"
                 body = reviewed_text or "Your request has been reviewed by our support team."
                 payload_hash = str(hash(body))
