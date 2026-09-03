@@ -145,4 +145,7 @@ def test_paused_run_reports_only_the_nodes_it_actually_reached(tmp_path: Path) -
 
     run = service.submit(body="We have a confidential data breach.", client_id="client-1")
 
-    assert run.visited_nodes == ["intake", "triage"]
+    # The run pauses inside human_review, so the trace stops at the evidence gathered
+    # for the specialist. Nothing downstream of the interrupt is reported as visited.
+    assert run.visited_nodes == ["intake", "triage", "gather_evidence"]
+

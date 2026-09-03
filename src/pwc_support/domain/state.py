@@ -17,6 +17,7 @@ class SupportState(TypedDict, total=False):
     channel: str
     case_id: str | None
     triage: dict[str, Any]
+    evidence: dict[str, Any]
     plan: dict[str, Any]
     expected_task_ids: list[str]
     task: dict[str, Any]

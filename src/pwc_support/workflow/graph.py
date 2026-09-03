@@ -168,13 +168,34 @@ def build_graph(
 
     def route_after_triage(
         state: SupportState,
-    ) -> Literal["plan_work", "human_review", "respond_directly"]:
+    ) -> Literal["plan_work", "gather_evidence", "respond_directly"]:
         route = state["triage"]["route"]
         if route == Route.REVIEW.value:
-            return "human_review"
+            return "gather_evidence"
         if route in (Route.GREETING.value, Route.CLARIFY.value, Route.UNSUPPORTED.value):
             return "respond_directly"
         return "plan_work"
+
+    def gather_evidence(state: SupportState) -> dict[str, Any]:
+        """Research an escalated enquiry for the specialist without drafting a reply.
+
+        A sensitive enquiry must never have the model write an answer, so this runs the
+        RAG subgraph in evidence-only mode: the specialist opens the review with the
+        relevant published sources already in front of them instead of a blank box.
+        """
+        started = time.perf_counter()
+        if rag_answerer is None:
+            return {
+                "events": [_event("gather_evidence", "skipped", started,
+                                  reason="no_retrieval_runtime")]
+            }
+        body = str(state["message"]["body"])
+        bundle = rag_answerer.gather_evidence(RagRequest(question=body))
+        return {
+            "evidence": bundle.model_dump(mode="json"),
+            "events": [_event("gather_evidence", "completed", started,
+                              sources=len(bundle.citations))],
+        }
 
     def plan_work(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
@@ -443,6 +464,9 @@ def build_graph(
             "original_message": state["message"]["body"],
             "proposed_reply": state.get("draft", {}),
             "proposed_actions": state.get("proposed_actions", []),
+            # Only the triage path carries background evidence; an enquiry escalated
+            # after drafting arrives with a draft that already cites its own sources.
+            "evidence": state.get("evidence", {}).get("citations", []),
             "verification": state.get("verification", {}),
             "response_version": int(state.get("draft_version", 1)),
         }
@@ -561,6 +585,7 @@ def build_graph(
     for name, node in (
         ("intake", intake),
         ("triage", triage),
+        ("gather_evidence", gather_evidence),
         ("plan_work", plan_work),
         ("execute_task", execute_task),
         ("case_tools", case_tools),
@@ -574,8 +599,9 @@ def build_graph(
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "triage")
     builder.add_conditional_edges(
-        "triage", route_after_triage, ["plan_work", "human_review", "respond_directly"]
+        "triage", route_after_triage, ["plan_work", "gather_evidence", "respond_directly"]
     )
+    builder.add_edge("gather_evidence", "human_review")
     builder.add_conditional_edges("plan_work", fan_out_tasks, ["execute_task"])
     builder.add_edge("execute_task", "case_tools")
     builder.add_edge("case_tools", "compose_reply")
