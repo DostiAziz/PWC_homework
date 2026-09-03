@@ -13,7 +13,8 @@ from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
 from pwc_support.storage.database import Database
-from pwc_support.storage.repositories import CaseRepository, ReviewRepository
+from pwc_support.storage.repositories import CaseRepository, ReviewRepository, OutboxRepository, MailboxRepository
+from pwc_support.services.review import OutboxDispatcher, ReviewService
 from pwc_support.workflow.graph import build_graph
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 
@@ -31,6 +32,8 @@ class Runtime:
     reviews: ReviewRepository
     mailbox: SimulatedMailbox
     knowledge_base: ChromaKnowledgeBase
+    review_service: ReviewService
+    dispatcher: OutboxDispatcher
 
 
 def build_runtime(
@@ -69,7 +72,7 @@ def build_runtime(
             answer_tokens=resolved.answer_tokens,
         ),
         toolbox=Toolbox(case_tool=CaseTool(cases), mailbox_tool=MailboxTool(mailbox)),
-        enable_interrupt=enable_interrupt,
+        enable_interrupt=False,
         checkpointer=checkpointer,
         max_planned_tasks=resolved.max_planned_tasks,
     )
@@ -81,4 +84,6 @@ def build_runtime(
         reviews=reviews,
         mailbox=mailbox,
         knowledge_base=knowledge_base,
+        review_service=ReviewService(reviews),
+        dispatcher=OutboxDispatcher(OutboxRepository(database), MailboxRepository(database)),
     )

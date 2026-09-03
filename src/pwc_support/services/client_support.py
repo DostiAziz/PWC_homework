@@ -138,7 +138,7 @@ class ClientSupportService:
             review_request = _interrupt_payload(interrupts)
         events = list(state.get("events", []))
         self._persist_events(events, conversation=conversation, run_id=run_id)
-        if interrupts and review_request is not None:
+        if review_request is not None and (interrupts or str(state.get("outcome", {}).get("status")) == OutcomeStatus.PENDING_REVIEW.value):
             self._persist_review(review_request, run_id=run_id, checkpoint_id=checkpoint_id)
             outcome = ClientOutcome(
                 conversation_id=conversation,
@@ -154,7 +154,7 @@ class ClientSupportService:
                 outcome=outcome,
                 thread_id=thread_id,
                 checkpoint_id=checkpoint_id,
-                interrupted=True,
+                interrupted=bool(interrupts),
                 review_request=review_request,
                 events=events,
                 tool_calls=list(state.get("tool_calls", [])),
