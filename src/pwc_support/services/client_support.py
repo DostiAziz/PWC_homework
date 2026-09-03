@@ -139,7 +139,7 @@ class ClientSupportService:
         events = list(state.get("events", []))
         self._persist_events(events, conversation=conversation, run_id=run_id)
         if interrupts and review_request is not None:
-            self._persist_review(review_request, run_id=run_id)
+            self._persist_review(review_request, run_id=run_id, checkpoint_id=checkpoint_id)
             outcome = ClientOutcome(
                 conversation_id=conversation,
                 case_id=review_request.get("case_id"),
@@ -207,7 +207,9 @@ class ClientSupportService:
                 )
             )
 
-    def _persist_review(self, request: dict[str, Any], *, run_id: UUID) -> None:
+    def _persist_review(
+        self, request: dict[str, Any], *, run_id: UUID, checkpoint_id: str
+    ) -> None:
         if self.reviews is None:
             return
         self.reviews.create(
@@ -219,6 +221,11 @@ class ClientSupportService:
                     ReviewCategory(category) for category in request.get("categories", [])
                 ),
                 original_message=str(request.get("original_message", "")),
+                evidence=tuple(
+                    Citation.model_validate(item) for item in request.get("evidence", [])
+                ),
+                # Stored so a later session can resume this paused run from the queue.
+                checkpoint_id=checkpoint_id,
                 response_version=int(request.get("response_version", 1)),
             )
         )

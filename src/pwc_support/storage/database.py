@@ -43,6 +43,8 @@ class Database:
                     original_message TEXT NOT NULL,
                     proposed_reply_json TEXT,
                     proposed_actions_json TEXT NOT NULL,
+                    evidence_json TEXT,
+                    checkpoint_id TEXT,
                     response_version INTEGER NOT NULL,
                     status TEXT NOT NULL
                 );
@@ -60,6 +62,21 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_event_run ON operational_events(run_id, event_id);
                 """
             )
+            # `CREATE TABLE IF NOT EXISTS` leaves a database made by an earlier version
+            # untouched, so columns added later are backfilled explicitly.
+            self._add_missing_column(connection, "review_requests", "evidence_json", "TEXT")
+            self._add_missing_column(connection, "review_requests", "checkpoint_id", "TEXT")
+
+    @staticmethod
+    def _add_missing_column(
+        connection: sqlite3.Connection, table: str, column: str, declaration: str
+    ) -> None:
+        existing = {
+            str(row["name"])
+            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def record_event(self, event: OperationalEvent) -> None:
         with self.connect() as connection:

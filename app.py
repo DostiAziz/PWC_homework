@@ -227,7 +227,8 @@ def render_review(service: ClientSupportService) -> None:
     st.subheader("Pending specialist reviews")
     st.caption(
         "Each decision resumes the paused LangGraph run from its SQLite checkpoint, so the "
-        "client reply is produced by the workflow rather than by this page."
+        "client reply is produced by the workflow rather than by this page. Reviews survive "
+        "a restart: the checkpoint namespace is stored with the request."
     )
     pending = service.pending_reviews()
     if not pending:
@@ -239,11 +240,25 @@ def render_review(service: ClientSupportService) -> None:
 
 def _render_review_card(service: ClientSupportService, review: ReviewRequest) -> None:
     key = str(review.review_id)
-    checkpoint_id = st.session_state.review_threads.get(key)
+    checkpoint_id = review.checkpoint_id
     with st.container(border=True):
         st.markdown(f"**Case {review.case_id}** · review `{key[:8]}`")
         st.caption(f"Categories: {', '.join(sorted(review.categories)) or 'none'}")
         st.write(review.original_message)
+        if review.evidence:
+            with st.expander(f"Background sources ({len(review.evidence)})", expanded=True):
+                st.caption(
+                    "Retrieved for this enquiry. No reply was drafted — a sensitive "
+                    "enquiry is never answered by the model."
+                )
+                for citation in review.evidence:
+                    label = f"{citation.title} — {citation.heading}"
+                    if citation.canonical_url:
+                        st.markdown(f"**[{label}]({citation.canonical_url})**")
+                    else:
+                        st.markdown(f"**{label}** *(synthetic source)*")
+                    st.caption(f"similarity {citation.similarity:.2f}")
+                    st.text(citation.excerpt[:400])
         proposed = review.proposed_reply.text if review.proposed_reply else ""
         kind = st.selectbox(
             "Decision",
@@ -258,8 +273,8 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest) ->
         reviewer = st.text_input("Reviewer", value="specialist-1", key=f"reviewer-{key}")
         if checkpoint_id is None:
             st.warning(
-                "This review was recorded in a previous session, so its paused run is not "
-                "addressable from this page. Resume it from the session that created it."
+                "This review predates checkpoint tracking, so its paused run cannot be "
+                "addressed. Resolve it outside this queue."
             )
             return
         if st.button("Submit decision", key=f"submit-{key}", type="primary"):
@@ -283,34 +298,18 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest) ->
                     "run": run,
                 }
             )
-            st.session_state.review_threads.pop(key, None)
             st.rerun()
 
 
 def initialise_session() -> None:
     defaults: dict[str, Any] = {
         "messages": [],
-        "review_threads": {},
         "conversation_id": uuid4(),
         "client_id": "demo-client",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-
-
-def track_pending_review(run: WorkflowRun) -> None:
-    if run.interrupted and run.review_request is not None:
-        st.session_state.review_threads[str(run.review_request["review_id"])] = run.checkpoint_id
-
-
-class TrackingService(ClientSupportService):
-    """Remember which checkpoint thread each pending review belongs to."""
-
-    def submit(self, **kwargs: Any) -> WorkflowRun:
-        run = super().submit(**kwargs)
-        track_pending_review(run)
-        return run
 
 
 st.title("PwC client support")
@@ -334,12 +333,7 @@ except Exception as error:  # surfaced to the operator, never hidden behind a fa
     )
     st.stop()
 
-service = TrackingService(
-    application.runtime.graph,
-    reviews=application.runtime.reviews,
-    database=application.runtime.database,
-    mailbox=application.runtime.mailbox,
-)
+service = application.service
 settings = application.runtime.settings
 st.sidebar.subheader("Local runtime")
 st.sidebar.write(f"Generation: `{settings.generation_model}`")

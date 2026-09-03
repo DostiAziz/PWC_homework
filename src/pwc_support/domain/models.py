@@ -253,6 +253,9 @@ class ReviewRequest(DomainModel):
     # Background sources retrieved for the specialist. Empty when the enquiry was
     # escalated after drafting, because the draft carries its own citations.
     evidence: tuple[Citation, ...] = ()
+    # The paused run's LangGraph checkpoint namespace. Persisting it is what lets a
+    # review raised in one session be resumed from another.
+    checkpoint_id: str | None = None
     response_version: int = Field(ge=1)
     status: Literal["pending", "decided"] = "pending"
 
