@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 class CorpusDocument(BaseModel):
@@ -19,7 +19,17 @@ class CorpusDocument(BaseModel):
     language: str = "en"
     source_status: str = "active"
     version: str = "1"
+    checksum: str | None = None
     text: str = ""
+
+    @field_validator("path")
+    @classmethod
+    def reject_unsafe_path(cls, value: str) -> str:
+        """Corpus paths must stay inside the corpus root: no absolutes, no traversal."""
+        candidate = PurePosixPath(value)
+        if candidate.is_absolute() or ".." in candidate.parts or not value.strip():
+            raise ValueError(f"unsafe corpus path: {value!r}")
+        return value
 
 
 class ChunkingConfig(BaseModel):
@@ -66,16 +76,43 @@ class MetadataContextualizer:
         )
 
 
+class ManifestError(ValueError):
+    """The corpus manifest is not a usable description of the knowledge base."""
+
+
 def load_manifest(path: Path) -> tuple[CorpusDocument, ...]:
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    return tuple(CorpusDocument.model_validate(item) for item in payload["documents"])
+    documents = tuple(CorpusDocument.model_validate(item) for item in payload["documents"])
+    _reject_duplicates("source_id", [document.source_id for document in documents])
+    _reject_duplicates("path", [document.path for document in documents])
+    return documents
+
+
+def _reject_duplicates(field: str, values: list[str]) -> None:
+    duplicates = sorted({value for value in values if values.count(value) > 1})
+    if duplicates:
+        raise ManifestError(f"duplicate {field} in manifest: {', '.join(duplicates)}")
 
 
 def load_documents(root: Path, manifest: tuple[CorpusDocument, ...]) -> tuple[CorpusDocument, ...]:
-    return tuple(
-        document.model_copy(update={"text": (root / document.path).read_text(encoding="utf-8")})
-        for document in manifest
-    )
+    """Read every declared document, verifying any checksum the manifest commits to."""
+    resolved_root = root.resolve()
+    loaded: list[CorpusDocument] = []
+    for document in manifest:
+        source = (resolved_root / document.path).resolve()
+        if not source.is_relative_to(resolved_root):
+            raise ManifestError(f"corpus path escapes the corpus root: {document.path}")
+        if not source.is_file():
+            raise ManifestError(f"missing corpus document: {document.path}")
+        text = source.read_text(encoding="utf-8")
+        checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if document.checksum and document.checksum != checksum:
+            raise ManifestError(
+                f"checksum mismatch for {document.source_id}: "
+                f"declared {document.checksum}, found {checksum}"
+            )
+        loaded.append(document.model_copy(update={"text": text}))
+    return tuple(loaded)
 
 
 def chunk_document(
