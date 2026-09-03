@@ -16,6 +16,7 @@ from pwc_support.storage.database import Database
 from pwc_support.storage.repositories import CaseRepository, ReviewRepository, OutboxRepository, MailboxRepository
 from pwc_support.services.review import OutboxDispatcher, ReviewService
 from pwc_support.workflow.graph import build_graph
+from pwc_support.workflow.risk_classifier import OllamaSemanticRiskClassifier
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
@@ -62,7 +63,13 @@ def build_runtime(
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
     mailbox = SimulatedMailbox(resolved.mailbox_path, database=database)
+    risk_classifier = (
+        OllamaSemanticRiskClassifier.from_settings(resolved)
+        if resolved.semantic_classifier_model.strip()
+        else None
+    )
     graph = build_graph(
+        risk_classifier=risk_classifier,
         rag_answerer=RagAnswerer(
             knowledge_base,
             generator,

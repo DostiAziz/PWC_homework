@@ -362,6 +362,11 @@ def build_graph(
                                   operation="reused")],
             }
         categories = state["triage"].get("review_categories") or []
+        if not categories and not state["triage"].get("case_reference"):
+            return {
+                "events": [_event("case_tools", "skipped", started,
+                                  reason="routine_enquiry_no_case")]
+            }
         record, call = tools.case_tool.open_case(
             conversation_id=UUID(state["conversation_id"]),
             client_id=state["client_id"],
