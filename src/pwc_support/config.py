@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Literal, cast
@@ -16,7 +17,7 @@ class Settings(BaseModel):
     chroma_mode: Literal["persistent", "http"] = "persistent"
     chroma_host: str = "127.0.0.1"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
-    collection_name: str = "pwc_support_v1_nomic_768"
+    collection_name: str = "pwc_support_v2_nomic_768_cosine"
     supported_language: Literal["en"] = "en"
     num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
@@ -29,6 +30,10 @@ class Settings(BaseModel):
     context_document_max_chars: int = Field(default=24000, ge=2000, le=100000)
     max_planned_tasks: int = Field(default=4, ge=1, le=4)
     max_revisions: int = Field(default=2, ge=0, le=2)
+    top_k: int = Field(default=6, ge=1, le=20)
+    minimum_similarity: float = Field(default=0.45, ge=0.0, le=1.0)
+    max_selected_hits: int = Field(default=4, ge=1, le=10)
+    max_evidence_chars: int = Field(default=6000, ge=500, le=40000)
 
     @property
     def operations_db(self) -> Path:
@@ -45,6 +50,20 @@ class Settings(BaseModel):
     @property
     def lexical_db(self) -> Path:
         return self.data_dir / "state" / "lexical.sqlite3"
+
+    @property
+    def mailbox_path(self) -> Path:
+        return self.data_dir / "state" / "mailbox.json"
+
+    def with_retrieval_config(self, path: Path) -> Settings:
+        """Overlay the reviewable retrieval configuration file onto these settings."""
+        if not path.exists():
+            return self
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        fields = set(type(self).model_fields)
+        return self.model_copy(
+            update={key: value for key, value in payload.items() if key in fields}
+        )
 
     @model_validator(mode="after")
     def protect_mac_profile(self) -> Settings:
@@ -64,4 +83,7 @@ class Settings(BaseModel):
             chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
             chunk_size_tokens=int(os.getenv("PWC_CHUNK_SIZE_TOKENS", "300")),
             chunk_overlap_tokens=int(os.getenv("PWC_CHUNK_OVERLAP_TOKENS", "50")),
+            generation_model=os.getenv("PWC_GENERATION_MODEL", "gpt-oss:20b"),
+            embedding_model=os.getenv("PWC_EMBEDDING_MODEL", "nomic-embed-text"),
+            answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
         )

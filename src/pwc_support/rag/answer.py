@@ -2,69 +2,47 @@ from __future__ import annotations
 
 from typing import Any
 
-from pwc_support.domain.models import Citation, RagRequest, RagResult
+from pwc_support.domain.models import RagRequest, RagResult
+from pwc_support.rag.subgraph import (
+    Generator,
+    KnowledgeBase,
+    build_rag_graph,
+    prepare_query,
+    to_rag_result,
+)
 
-
-def prepare_query(question: str) -> str:
-    normalized = question.casefold()
-    refers_to_assistant = " you" in f" {normalized}" or " your" in f" {normalized}"
-    if refers_to_assistant and "pwc" not in normalized:
-        return f"{question} PwC business services"
-    return question
+__all__ = ["RagAnswerer", "prepare_query"]
 
 
 class RagAnswerer:
-    """Answer only from retrieved evidence and expose its source mapping."""
+    """Invoke the compiled RAG subgraph and expose its result to the main workflow."""
 
     def __init__(
-        self, knowledge_base: Any, generator: Any, *, minimum_similarity: float = 0.45
+        self,
+        knowledge_base: KnowledgeBase,
+        generator: Generator,
+        *,
+        minimum_similarity: float = 0.45,
+        max_selected_hits: int = 4,
+        max_evidence_chars: int = 6000,
+        answer_tokens: int = 512,
     ) -> None:
         self.knowledge_base = knowledge_base
         self.generator = generator
         self.minimum_similarity = minimum_similarity
+        self.graph = build_rag_graph(
+            knowledge_base,
+            generator,
+            minimum_similarity=minimum_similarity,
+            max_selected_hits=max_selected_hits,
+            max_evidence_chars=max_evidence_chars,
+            answer_tokens=answer_tokens,
+        )
 
     def answer(self, request: RagRequest) -> RagResult:
-        prepared_request = request.model_copy(
-            update={"question": prepare_query(request.question)}
-        )
-        batch = self.knowledge_base.retrieve(prepared_request)
-        hits = tuple(
-            hit
-            for hit in batch.hits
-            if hit.similarity >= self.minimum_similarity or hit.source_type == "lexical"
-        )
-        if not hits:
-            return RagResult(
-                status="insufficient_evidence",
-                hits=batch.hits,
-                used_filter_fallback=batch.used_filter_fallback,
-            )
-        citations = tuple(
-            Citation(
-                source_id=hit.source_id,
-                chunk_id=hit.chunk_id,
-                marker=f"[S{index}]",
-                title=hit.title,
-                canonical_url=hit.canonical_url,
-                heading=hit.heading,
-                excerpt=hit.text[:500],
-                similarity=hit.similarity,
-            )
-            for index, hit in enumerate(hits, start=1)
-        )
-        evidence = "\n\n".join(
-            f"{citation.marker} {hit.title}: {hit.text}"
-            for citation, hit in zip(citations, hits, strict=True)
-        )
-        answer = self.generator.text(
-            system="Answer only from the evidence. Keep the citation markers.",
-            user=f"Question: {request.question}\nEvidence:\n{evidence}",
-        )
-        return RagResult(
-            status="answered",
-            answer=answer,
-            citations=citations,
-            hits=hits,
-            used_filter_fallback=batch.used_filter_fallback,
-            evidence_conflict=batch.evidence_conflict,
-        )
+        return to_rag_result(self.run(request))
+
+    def run(self, request: RagRequest) -> dict[str, Any]:
+        """Return the subgraph's full terminal state, including per-node timings."""
+        state: dict[str, Any] = self.graph.invoke({"request": request})
+        return state

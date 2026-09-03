@@ -1,4 +1,5 @@
 {
+  "distance_space": "cosine",
   "top_k": 6,
   "minimum_similarity": 0.45,
   "max_selected_hits": 4,

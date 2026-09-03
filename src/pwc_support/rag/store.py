@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel
@@ -11,6 +12,15 @@ from pwc_support.rag.lexical import LexicalIndex
 
 class Embedder(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+def chroma_client(settings: Any) -> Any:
+    """Resolve the configured Chroma backend so ingestion and serving always agree."""
+    import chromadb
+
+    if settings.chroma_mode == "http":
+        return chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+    return chromadb.PersistentClient(path=str(settings.chroma_path))
 
 
 class SyncReport(BaseModel):
@@ -28,10 +38,16 @@ class ChromaKnowledgeBase:
         collection_name: str,
         embedder: Embedder,
         lexical_index: LexicalIndex | None = None,
+        top_k: int = 6,
     ) -> None:
-        self.collection = client.get_or_create_collection(collection_name)
+        # Cosine space is required: these are unnormalised nomic-embed-text vectors, and
+        # the retrieval threshold is expressed as a cosine similarity of 1 - distance.
+        self.collection = client.get_or_create_collection(
+            collection_name, configuration={"hnsw": {"space": "cosine"}}
+        )
         self.embedder = embedder
         self.lexical_index = lexical_index
+        self.top_k = top_k
 
     def sync(
         self,
@@ -95,16 +111,18 @@ class ChromaKnowledgeBase:
         }
 
     def retrieve(
-        self, request: RagRequest | str, *, language: str = "en", top_k: int = 6
+        self, request: RagRequest | str, *, language: str = "en", top_k: int | None = None
     ) -> RetrievalBatch:
+        top_k = self.top_k if top_k is None else top_k
         if isinstance(request, str):
             request = RagRequest(
                 question=request,
                 language=cast(Literal["en"], language),
             )
         where = {"$and": [{"language": request.language}, {"source_status": "active"}]}
+        query_embedding = self.embedder.embed([request.question])[0]
         result = self.collection.query(
-            query_embeddings=self.embedder.embed([request.question]),
+            query_embeddings=[query_embedding],
             n_results=top_k,
             where=where,
         )
@@ -130,25 +148,47 @@ class ChromaKnowledgeBase:
         lexical_ids = self.lexical_index.search(request.question, limit=top_k * 3)
         if not lexical_ids:
             return RetrievalBatch(hits=vector_hits)
-        lexical_result = self.collection.get(ids=lexical_ids, where=where)
-        lexical_hits = self._hits_from_get(lexical_result)
+        lexical_result = self.collection.get(
+            ids=lexical_ids,
+            where=where,
+            include=["documents", "metadatas", "embeddings"],
+        )
+        lexical_hits = self._hits_from_get(lexical_result, query_embedding)
         return RetrievalBatch(hits=self._fuse(vector_hits, lexical_hits, top_k))
 
-    @staticmethod
-    def _hits_from_get(result: dict[str, Any]) -> tuple[RetrievalHit, ...]:
+    @classmethod
+    def _hits_from_get(
+        cls, result: dict[str, Any], query_embedding: list[float]
+    ) -> tuple[RetrievalHit, ...]:
+        """Score keyword hits against the same query vector so one threshold governs both."""
         documents = result.get("documents") or []
         metadatas = result.get("metadatas") or []
+        embeddings = result.get("embeddings")
         return tuple(
             RetrievalHit(
                 source_id=str(metadata["source_id"]), chunk_id=str(result["ids"][index]),
                 title=str(metadata["title"]), text=str(documents[index]),
                 heading=str(metadata.get("heading", "")),
-                canonical_url=metadata.get("canonical_url") or None, similarity=0.0,
+                canonical_url=metadata.get("canonical_url") or None,
+                similarity=cls._cosine(
+                    query_embedding,
+                    None if embeddings is None else embeddings[index],
+                ),
                 language=str(metadata["language"]), source_status=str(metadata["source_status"]),
                 source_type="lexical",
             )
             for index, metadata in enumerate(metadatas)
         )
+
+    @staticmethod
+    def _cosine(left: list[float], right: Any) -> float:
+        if right is None or len(right) != len(left):
+            return 0.0
+        dot = sum(float(a) * float(b) for a, b in zip(left, right, strict=True))
+        norm = math.sqrt(sum(float(a) ** 2 for a in left)) * math.sqrt(
+            sum(float(b) ** 2 for b in right)
+        )
+        return 0.0 if norm == 0.0 else max(-1.0, min(1.0, dot / norm))
 
     @staticmethod
     def _fuse(
