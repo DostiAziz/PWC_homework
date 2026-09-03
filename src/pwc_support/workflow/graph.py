@@ -120,6 +120,7 @@ def build_graph(
     risk_classifier: Any = None,
     rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
+    retail_tools: list[Any] | None = None,
     enable_interrupt: bool = False,
     checkpointer: Any = None,
     max_planned_tasks: int = 4,
@@ -158,6 +159,8 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
+        if any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer")):
+            route = Route.PLAN
         semantic = None
         failure_class = None
         if not decision.requires_review and route is Route.PLAN and risk_classifier is not None:
@@ -241,6 +244,12 @@ def build_graph(
     def plan_work(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         body = str(state["message"]["body"])
+        if retail_tools and any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer")):
+            query = next((word for word in ("jacket", "backpack", "headphones", "offer", "product") if word in body.casefold()), body)
+            result = retail_tools[0].invoke({"query": query})
+            products = result.get("products", []) if isinstance(result, dict) else []
+            answer = "\n".join(f"{item['name']}: {item['price']} {item['currency']} ({item['stock']} in stock)" for item in products) or "No matching products found."
+            return {"plan": {"tasks": []}, "expected_task_ids": [], "retail_intent": "product_search", "retail_answer": answer, "events": [_event("plan_work", "retail_lookup", started, count=len(products))]}
         reference = state["triage"].get("case_reference")
         knowledge_limit = max_planned_tasks - (1 if reference else 0)
         tasks = [
@@ -266,8 +275,10 @@ def build_graph(
                               task_kinds=[task.kind.value for task in plan.tasks])],
         }
 
-    def fan_out_tasks(state: SupportState) -> list[Send]:
+    def fan_out_tasks(state: SupportState) -> list[Send] | str:
         """Dispatch every planned task to an independent worker in one superstep."""
+        if state.get("retail_intent") == "product_search":
+            return "compose_reply"
         return [
             Send(
                 "execute_task",
@@ -398,6 +409,11 @@ def build_graph(
 
     def compose_reply(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
+        if state.get("retail_intent") == "product_search":
+            return {
+                "draft": {"text": str(state.get("retail_answer", "No matching products found.")), "citation_markers": [], "citations": [], "response_version": 1, "source": "system"},
+                "events": [_event("compose_reply", "retail", started)],
+            }
         answered = [
             result
             for result in state.get("rag_results", [])
@@ -430,6 +446,9 @@ def build_graph(
         draft = state.get("draft", {})
         text = str(draft.get("text", ""))
         citations = draft.get("citations", [])
+        if state.get("retail_intent") == "product_search":
+            verification = Verification(route="release", reason="Structured product facts supplied by database tool")
+            return {"verification": verification.model_dump(mode="json"), "events": [_event("verify_response", "release", started, citations=0)]}
         known = {str(citation["marker"]) for citation in citations}
         invented = sorted(set(MARKER.findall(text)) - known)
         if not text or not citations:
@@ -648,7 +667,7 @@ def build_graph(
         "triage", route_after_triage, ["plan_work", "gather_evidence", "respond_directly"]
     )
     builder.add_edge("gather_evidence", "human_review")
-    builder.add_conditional_edges("plan_work", fan_out_tasks, ["execute_task"])
+    builder.add_conditional_edges("plan_work", fan_out_tasks, ["execute_task", "compose_reply"])
     builder.add_edge("execute_task", "case_tools")
     builder.add_edge("case_tools", "compose_reply")
     builder.add_edge("compose_reply", "verify_response")
