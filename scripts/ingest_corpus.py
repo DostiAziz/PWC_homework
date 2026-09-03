@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import chromadb
 import ollama
 
 from pwc_support.config import Settings
@@ -16,7 +15,7 @@ from pwc_support.rag.ingest import (
     prepare_chunks,
 )
 from pwc_support.rag.lexical import LexicalIndex
-from pwc_support.rag.store import ChromaKnowledgeBase
+from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
 
 
 def main() -> None:
@@ -28,11 +27,11 @@ def main() -> None:
         help="Use deterministic source context instead of local LLM contextualization",
     )
     args = parser.parse_args()
-    settings = Settings.from_env()
+    settings = Settings.from_env().with_retrieval_config(Path("config/retrieval.json"))
     root = Path(__file__).parents[1] / "corpus"
     ollama_client = ollama.Client(host=settings.ollama_base_url)
     store = ChromaKnowledgeBase(
-        chromadb.PersistentClient(path=str(settings.chroma_path)),
+        chroma_client(settings),
         settings.collection_name,
         OllamaEmbedder(ollama_client, settings.embedding_model),
         LexicalIndex(settings.lexical_db),

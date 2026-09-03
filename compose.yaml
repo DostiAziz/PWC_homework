@@ -1,23 +1,56 @@
 services:
-  app:
+  # One-shot bootstrap: builds the Chroma collection and BM25 index before the UI starts.
+  ingest:
     build: .
-    ports:
-      - "8501:8501"
     environment:
       PWC_DATA_DIR: /app/data
+      # Native Ollama runs on the host, not in this network.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       CHROMA_MODE: http
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
     volumes:
       - app-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - chroma
+      chroma:
+        condition: service_healthy
+    command: ["python", "scripts/ingest_corpus.py"]
+    restart: "no"
+
+  app:
+    build: .
+    ports:
+      - "${PWC_APP_PORT:-8501}:8501"
+    environment:
+      PWC_DATA_DIR: /app/data
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      CHROMA_MODE: http
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+    volumes:
+      - app-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      chroma:
+        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
+
   chroma:
     image: chromadb/chroma:1.5.9
     ports:
       - "8000:8000"
     volumes:
       - chroma-data:/data
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "cat < /dev/null > /dev/tcp/127.0.0.1/8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
 volumes:
   app-data:
