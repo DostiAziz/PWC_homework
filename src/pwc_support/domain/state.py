@@ -41,3 +41,8 @@ class SupportState(TypedDict, total=False):
     delivery: dict[str, Any]
     error: dict[str, Any]
     outcome: dict[str, Any]
+    retail_intent: str
+    tool_results: dict[str, Any]
+    action_proposal: dict[str, Any]
+    action_risk: str
+    return_id: str
