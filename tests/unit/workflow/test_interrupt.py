@@ -57,3 +57,19 @@ def test_sqlite_checkpoints_survive_a_restarted_process(tmp_path: Path) -> None:
 
     assert resumed["outcome"]["status"] == "pending_review"
     assert resumed["review_decision"]["kind"] == "approve"
+
+
+def test_requesting_a_revision_never_approves_the_draft_it_rejected() -> None:
+    graph = build_graph(
+        rag_answerer=fake_rag_answerer(),
+        toolbox=fake_toolbox(),
+        enable_interrupt=True,
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "revision-thread-1"}}
+    graph.invoke({"message": {"body": "I want to escalate a complaint."}}, config)
+
+    resumed = graph.invoke(Command(resume={"kind": "request_revision"}), config)
+
+    assert resumed["outcome"]["status"] == "pending_review"
+    assert resumed["review_decision"]["kind"] == "request_revision"

@@ -492,7 +492,9 @@ def build_graph(
         edited = str(payload.get("edited_text") or payload.get("reply") or "").strip()
         if kind is ReviewDecisionKind.REJECT:
             message, status = REJECTED_REPLY, OutcomeStatus.UNABLE_TO_ANSWER
-        elif kind is ReviewDecisionKind.TAKE_OWNERSHIP:
+        elif kind in (ReviewDecisionKind.TAKE_OWNERSHIP, ReviewDecisionKind.REQUEST_REVISION):
+            # No redraft loop exists, so asking for a revision leaves the enquiry with the
+            # specialist. It must never fall through to approving the draft it rejected.
             message = edited or PENDING_REVIEW_REPLY
             status = OutcomeStatus.PENDING_REVIEW
         elif kind is ReviewDecisionKind.EDIT:
