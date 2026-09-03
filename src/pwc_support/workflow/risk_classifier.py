@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Protocol
-
-from pydantic import ValidationError
+from html import escape
+from typing import Protocol, cast
 
 from pwc_support.config import Settings
 from pwc_support.domain.errors import RiskClassificationUnavailable
@@ -10,6 +9,7 @@ from pwc_support.domain.models import (
     ReviewCategory,
     SemanticRiskDecision,
 )
+from pwc_support.llm.ollama import OllamaGenerator, StructuredOutputInvalid
 from pwc_support.workflow.policy import merge_routing
 
 SYSTEM_POLICY = """Classify the current customer enquiry for mandatory human review.
@@ -36,6 +36,9 @@ SEMANTIC_CATEGORIES = frozenset(
 
 
 class StructuredModel(Protocol):
+    model: str
+    request_timeout_seconds: float | None
+
     def structured(
         self,
         *,
@@ -43,7 +46,6 @@ class StructuredModel(Protocol):
         user: str,
         schema: type[SemanticRiskDecision],
         temperature: float,
-        timeout_seconds: float,
     ) -> object: ...
 
 
@@ -55,16 +57,37 @@ class OllamaSemanticRiskClassifier:
     """Schema-validated, tool-free semantic risk classification."""
 
     def __init__(self, model: StructuredModel, *, settings: Settings) -> None:
+        configured_model = settings.semantic_classifier_model.strip()
+        if not configured_model:
+            raise ValueError("semantic_classifier_model must be configured")
+        if model.model != configured_model:
+            raise ValueError(
+                "semantic classifier adapter model does not match semantic_classifier_model"
+            )
+        if model.request_timeout_seconds != settings.semantic_classifier_timeout_seconds:
+            raise ValueError(
+                "semantic classifier adapter timeout does not match configured timeout"
+            )
         self._model = model
-        self.model_name = settings.semantic_classifier_model
-        self.timeout_seconds = settings.semantic_classifier_timeout_seconds
+        self.model_name = model.model
+        self.timeout_seconds = model.request_timeout_seconds
         self.prompt_version = settings.semantic_classifier_prompt_version
         self.taxonomy_version = settings.semantic_classifier_taxonomy_version
         self.schema_version = settings.semantic_classifier_schema_version
         self._schema_retries = min(settings.semantic_classifier_retry_count, 1)
 
+    @classmethod
+    def from_settings(cls, settings: Settings) -> OllamaSemanticRiskClassifier:
+        model = OllamaGenerator.from_connection(
+            host=settings.ollama_base_url,
+            model=settings.semantic_classifier_model,
+            request_timeout_seconds=settings.semantic_classifier_timeout_seconds,
+            temperature=0.0,
+        )
+        return cls(cast(StructuredModel, model), settings=settings)
+
     def classify(self, *, enquiry: str) -> SemanticRiskDecision:
-        user = f"<untrusted_enquiry>\n{enquiry}\n</untrusted_enquiry>"
+        user = f"<untrusted_enquiry>\n{escape(enquiry, quote=False)}\n</untrusted_enquiry>"
         for attempt in range(self._schema_retries + 1):
             try:
                 raw_result = self._model.structured(
@@ -72,7 +95,6 @@ class OllamaSemanticRiskClassifier:
                     user=user,
                     schema=SemanticRiskDecision,
                     temperature=0.0,
-                    timeout_seconds=self.timeout_seconds,
                 )
                 return self._validate(raw_result)
             except TimeoutError as error:
@@ -80,7 +102,7 @@ class OllamaSemanticRiskClassifier:
                     failure_class="timeout",
                     message="semantic risk classification timed out",
                 ) from error
-            except (ValidationError, ValueError, TypeError) as error:
+            except StructuredOutputInvalid as error:
                 if attempt < self._schema_retries:
                     continue
                 raise RiskClassificationUnavailable(
@@ -98,7 +120,9 @@ class OllamaSemanticRiskClassifier:
     def _validate(raw_result: object) -> SemanticRiskDecision:
         decision = SemanticRiskDecision.model_validate(raw_result)
         if not decision.categories.issubset(SEMANTIC_CATEGORIES):
-            raise ValueError("semantic classifier returned a post-retrieval category")
+            raise StructuredOutputInvalid(
+                "semantic classifier returned a post-retrieval category"
+            )
         return decision
 
 
