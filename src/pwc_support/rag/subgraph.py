@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import time
 import re
+import time
 from html import escape
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
@@ -85,13 +85,11 @@ def build_rag_graph(
     max_evidence_chars: int = 6000,
     answer_tokens: int = 512,
     generate: bool = True,
-    checkpointer: Any = False,
 ) -> Any:
     """Compile the dedicated four-node retrieval-augmented-generation subgraph.
 
-    The subgraph is stateless by default (`checkpointer=False`). It never interrupts, and
-    the main graph fans several knowledge tasks onto the same instance in one superstep,
-    which would otherwise collide in a single inherited checkpoint namespace.
+    The subgraph is stateless. It never interrupts, and the main graph fans several
+    knowledge tasks onto the same instance in one superstep.
 
     With `generate=False` the same retrieval and selection run, but the graph stops after
     `select_evidence`. The escalation path uses that mode to put sources in front of a
@@ -111,9 +109,7 @@ def build_rag_graph(
 
     def retrieve_candidates_node(state: RagState) -> dict[str, Any]:
         started = time.perf_counter()
-        request = state["request"].model_copy(
-            update={"question": state["prepared_question"]}
-        )
+        request = state["request"].model_copy(update={"question": state["prepared_question"]})
         batch = knowledge_base.retrieve(request)
         return {
             "candidates": batch.hits,
@@ -177,7 +173,11 @@ def build_rag_graph(
             temperature=0.0,
         )
         if UNSAFE_OUTPUT.search(answer):
-            return {"answer": "", "status": "insufficient_evidence", "node_timings": _timed("answer_with_citations", started)}
+            return {
+                "answer": "",
+                "status": "insufficient_evidence",
+                "node_timings": _timed("answer_with_citations", started),
+            }
         return {"answer": answer, "node_timings": _timed("answer_with_citations", started)}
 
     builder: StateGraph[RagState, None, RagState, RagState] = StateGraph(RagState)
@@ -195,7 +195,7 @@ def build_rag_graph(
         # Evidence-only: the generation node is not compiled in at all, so no code path
         # can reach the model from an escalated enquiry.
         builder.add_edge("select_evidence", END)
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile()
 
 
 def to_evidence_bundle(state: dict[str, Any]) -> EvidenceBundle:

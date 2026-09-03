@@ -184,14 +184,6 @@ class RoutingSnapshot(DomainModel):
     snapshot_hash: str
 
 
-class FinalRoutingOutcome(DomainModel):
-    pre_retrieval_snapshot_hash: str
-    final_route: str
-    categories: frozenset[ReviewCategory] = frozenset()
-    post_retrieval_gate: str | None = None
-    failure_class: str | None = None
-
-
 class InboundClaim(DomainModel):
     provider: str
     provider_message_id: str
@@ -299,17 +291,6 @@ class EvidenceBundle(DomainModel):
     used_filter_fallback: bool = False
 
 
-class EscalationIntent(DomainModel):
-    inbound_message_id: str
-    categories: frozenset[ReviewCategory]
-    original_enquiry: str
-    evidence_state: Literal["selected", "insufficient", "conflicting", "unavailable"]
-    evidence: EvidenceBundle
-    delivery_recipient: str
-    delivery_thread_id: str
-    routing_provenance: RoutingSnapshot
-
-
 class OutboundMessage(DomainModel):
     delivery_key: str
     kind: MessageKind
@@ -338,7 +319,7 @@ class DeliveryReceipt(DomainModel):
 
 
 class InboundClaimResult(DomainModel):
-    status: Literal["claimed", "completed", "in_progress", "duplicate"]
+    status: Literal["claimed", "completed", "in_progress"]
     claim: InboundClaim | None = None
     outcome: ClientOutcome | None = None
 
@@ -360,8 +341,14 @@ class PlannedTask(DomainModel):
 
 class ProposedAction(DomainModel):
     action_type: Literal[
-        "create_case", "update_case", "schedule", "send_document", "deliver_email",
-        "retail_return", "retail_refund", "offer_replacement",
+        "create_case",
+        "update_case",
+        "schedule",
+        "send_document",
+        "deliver_email",
+        "retail_return",
+        "retail_refund",
+        "offer_replacement",
     ]
     description: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
     requires_review: bool = True
@@ -378,17 +365,6 @@ class TaskResult(DomainModel):
     status: TaskStatus
     payload: dict[str, Any] = Field(default_factory=dict)
     error_code: str | None = None
-
-
-class TriageDecision(DomainModel):
-    intent: str
-    sector: str | None = None
-    service_line: str | None = None
-    territory: str | None = None
-    missing_fields: tuple[str, ...] = ()
-    review_categories: frozenset[ReviewCategory] = frozenset()
-    confidence: float = Field(ge=0.0, le=1.0)
-    route: Route
 
 
 class DraftReply(DomainModel):
@@ -445,38 +421,15 @@ class ReviewRequest(DomainModel):
     # Background sources retrieved for the specialist. Empty when the enquiry was
     # escalated after drafting, because the draft carries its own citations.
     evidence: tuple[Citation, ...] = ()
-    # The paused run's LangGraph checkpoint namespace. Persisting it is what lets a
-    # review raised in one session be resumed from another.
-    checkpoint_id: str | None = None
     response_version: int = Field(ge=1)
     status: Literal["pending", "decided"] = "pending"
     evidence_state: Literal["selected", "insufficient", "conflicting", "unavailable"] = "selected"
     routing_provenance: RoutingSnapshot | None = None
     delivery_recipient: str | None = None
     delivery_thread_id: str | None = None
+    delivery_subject: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-
-
-class ReviewDecision(DomainModel):
-    review_id: UUID
-    kind: ReviewDecisionKind
-    reviewer_id: Annotated[str, StringConstraints(min_length=1, max_length=200)]
-    response_version: int = Field(ge=1)
-    edited_text: str | None = None
-    note: Annotated[str, StringConstraints(max_length=1000)] = ""
-    response_text: Annotated[str, StringConstraints(max_length=1500)] | None = None
-    reason: Annotated[str, StringConstraints(max_length=1000)] | None = None
-
-    @model_validator(mode="after")
-    def validate_edit(self) -> ReviewDecision:
-        if self.kind is ReviewDecisionKind.EDIT and not self.edited_text:
-            raise ValueError("edited_text is required for edit")
-        if self.kind is ReviewDecisionKind.SEND_RESPONSE and not self.response_text:
-            raise ValueError("response_text is required for send_response")
-        if self.kind is not ReviewDecisionKind.SEND_RESPONSE and self.response_text is not None:
-            raise ValueError("response_text is only valid for send_response")
-        return self
 
 
 class ClientOutcome(DomainModel):
@@ -497,9 +450,3 @@ class OperationalEvent(DomainModel):
     duration_ms: float | None = Field(default=None, ge=0)
     details: dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-class ConversationView(DomainModel):
-    conversation_id: UUID
-    messages: tuple[IncomingMessage, ...] = ()
-    outcome: ClientOutcome | None = None

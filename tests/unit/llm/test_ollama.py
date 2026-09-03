@@ -23,6 +23,30 @@ class FakeClient:
         return {"message": {"content": '{"route": "plan"}'}}
 
 
+def test_generator_wires_context_and_schema_token_limits() -> None:
+    class RecordingClient(FakeClient):
+        def __init__(self) -> None:
+            self.request: dict[str, Any] = {}
+
+        def chat(self, **kwargs: Any) -> dict[str, Any]:
+            self.request = kwargs
+            return super().chat(**kwargs)
+
+    client = RecordingClient()
+    OllamaGenerator(
+        client,
+        "risk-model:1",
+        num_ctx=4096,
+        schema_tokens=128,
+    ).structured(system="Return JSON.", user="Classify this.", schema=Output)
+
+    assert client.request["options"] == {
+        "temperature": 0.0,
+        "num_predict": 128,
+        "num_ctx": 4096,
+    }
+
+
 def test_ollama_adapters_use_explicit_models() -> None:
     client = FakeClient()
 

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
-
-from langgraph.types import Command
 
 from pwc_support.domain.models import (
     Channel,
@@ -14,10 +13,10 @@ from pwc_support.domain.models import (
     DraftReply,
     OperationalEvent,
     OutcomeStatus,
-    ReviewCategory,
-    ReviewDecision,
-    ReviewRequest,
     ProposedAction,
+    ReviewCategory,
+    ReviewRequest,
+    RoutingSnapshot,
 )
 from pwc_support.storage.repositories import InboundRepository
 
@@ -29,9 +28,6 @@ class WorkflowRun:
     outcome: ClientOutcome
     # The channel's own thread (an email conversation); stable across messages.
     thread_id: str
-    # This run's LangGraph checkpoint namespace; unique per run, and what resume targets.
-    checkpoint_id: str
-    interrupted: bool
     review_request: dict[str, Any] | None
     events: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -56,13 +52,11 @@ class ClientSupportService:
         *,
         reviews: Any = None,
         database: Any = None,
-        mailbox: Any = None,
         review_service: Any = None,
     ) -> None:
         self.graph = graph
         self.reviews = reviews
         self.database = database
-        self.mailbox = mailbox
         self.review_service = review_service
         self.inbound = InboundRepository(database) if database is not None else None
         self._identity_runs: dict[tuple[str, str], WorkflowRun] = {}
@@ -86,10 +80,25 @@ class ClientSupportService:
         cached = self._identity_runs.get((provider, identity))
         if cached is not None:
             return cached
-        # Each enquiry gets its own checkpoint namespace. Sharing one across a
-        # conversation would replay and accumulate the previous enquiry's state.
-        checkpoint_id = f"run-{run_id}"
-        config = {"configurable": {"thread_id": checkpoint_id}}
+        claim = None
+        inbound = self.inbound
+        if inbound is not None:
+            claim_result = inbound.claim(
+                provider,
+                identity,
+                hashlib.sha256(body.encode()).hexdigest(),
+                lease_seconds=300,
+                now=datetime.now(UTC),
+            )
+            if claim_result.status == "completed":
+                if claim_result.outcome is None:
+                    raise RuntimeError("completed inbound message has no stored outcome")
+                result = self._restore_cached_run(claim_result.outcome, thread_id=thread)
+                self._identity_runs[(provider, identity)] = result
+                return result
+            if claim_result.status == "in_progress" or claim_result.claim is None:
+                raise RuntimeError("message is already being processed")
+            claim = claim_result.claim
         state = self.graph.invoke(
             {
                 "message": {
@@ -105,42 +114,24 @@ class ClientSupportService:
                 "thread_id": thread,
                 "client_id": client_id,
                 "channel": channel.value,
+                "inbound_message_id": identity,
             },
-            config,
         )
         result = self._finish(
             state,
             conversation=conversation,
             run_id=run_id,
             thread_id=thread,
-            checkpoint_id=checkpoint_id,
         )
         self._identity_runs[(provider, identity)] = result
-        if self.inbound is not None:
-            claim = self.inbound.claim(
-                provider, identity, str(hash(body)), lease_seconds=300, now=datetime.now(UTC)
-            ).claim
-            if claim is not None:
-                self.inbound.complete(claim, result.outcome.model_dump(mode="json"))
+        if claim is not None and inbound is not None:
+            snapshot = state.get("routing_snapshot")
+            if snapshot is not None:
+                inbound.record_routing_snapshot(
+                    claim, RoutingSnapshot.model_validate(snapshot)
+                )
+            inbound.complete(claim, result.outcome.model_dump(mode="json"))
         return result
-
-    def resume(self, *, checkpoint_id: str, decision: ReviewDecision) -> WorkflowRun:
-        """Resume the checkpointed run that paused for a specialist decision."""
-        config = {"configurable": {"thread_id": checkpoint_id}}
-        state = self.graph.invoke(
-            Command(resume=decision.model_dump(mode="json")), config
-        )
-        conversation = UUID(str(state.get("conversation_id") or uuid4()))
-        run_id = UUID(str(state.get("run_id") or uuid4()))
-        if self.reviews is not None:
-            self.reviews.mark_decided(decision.review_id)
-        return self._finish(
-            state,
-            conversation=conversation,
-            run_id=run_id,
-            thread_id=str(state.get("thread_id") or conversation),
-            checkpoint_id=checkpoint_id,
-        )
 
     def pending_reviews(self) -> list[ReviewRequest]:
         return [] if self.reviews is None else list(self.reviews.list_pending())
@@ -159,16 +150,15 @@ class ClientSupportService:
         conversation: UUID,
         run_id: UUID,
         thread_id: str,
-        checkpoint_id: str,
     ) -> WorkflowRun:
-        interrupts = state.get("__interrupt__") or ()
         review_request = state.get("review_request")
-        if interrupts and review_request is None:
-            review_request = _interrupt_payload(interrupts)
         events = list(state.get("events", []))
         self._persist_events(events, conversation=conversation, run_id=run_id)
-        if review_request is not None and (interrupts or str(state.get("outcome", {}).get("status")) == OutcomeStatus.PENDING_REVIEW.value):
-            self._persist_review(review_request, run_id=run_id, checkpoint_id=checkpoint_id)
+        if (
+            review_request is not None
+            and str(state.get("outcome", {}).get("status")) == OutcomeStatus.PENDING_REVIEW.value
+        ):
+            self._persist_review(review_request, run_id=run_id)
             outcome = ClientOutcome(
                 conversation_id=conversation,
                 case_id=review_request.get("case_id"),
@@ -182,8 +172,6 @@ class ClientSupportService:
             return WorkflowRun(
                 outcome=outcome,
                 thread_id=thread_id,
-                checkpoint_id=checkpoint_id,
-                interrupted=bool(interrupts),
                 review_request=review_request,
                 events=events,
                 tool_calls=list(state.get("tool_calls", [])),
@@ -196,9 +184,7 @@ class ClientSupportService:
             conversation_id=conversation,
             case_id=outcome_state.get("case_id"),
             review_id=(
-                UUID(str(outcome_state["review_id"]))
-                if outcome_state.get("review_id")
-                else None
+                UUID(str(outcome_state["review_id"])) if outcome_state.get("review_id") else None
             ),
             status=OutcomeStatus(outcome_state.get("status", OutcomeStatus.FAILED.value)),
             message=str(delivery.get("message") or "No response was produced."),
@@ -210,8 +196,6 @@ class ClientSupportService:
         return WorkflowRun(
             outcome=outcome,
             thread_id=thread_id,
-            checkpoint_id=checkpoint_id,
-            interrupted=False,
             review_request=review_request,
             events=events,
             tool_calls=list(state.get("tool_calls", [])),
@@ -236,9 +220,7 @@ class ClientSupportService:
                 )
             )
 
-    def _persist_review(
-        self, request: dict[str, Any], *, run_id: UUID, checkpoint_id: str
-    ) -> None:
+    def _persist_review(self, request: dict[str, Any], *, run_id: UUID) -> None:
         if self.reviews is None:
             return
         self.reviews.create(
@@ -255,22 +237,45 @@ class ClientSupportService:
                 ),
                 proposed_reply=(
                     DraftReply.model_validate(request["proposed_reply"])
-                    if request.get("proposed_reply") else None
+                    if request.get("proposed_reply")
+                    else None
                 ),
                 proposed_actions=tuple(
                     ProposedAction.model_validate(item)
                     for item in request.get("proposed_actions", [])
                 ),
-                # Stored so a later session can resume this paused run from the queue.
-                checkpoint_id=checkpoint_id,
                 response_version=int(request.get("response_version", 1)),
+                evidence_state=cast(
+                    Literal["selected", "insufficient", "conflicting", "unavailable"],
+                    str(request.get("evidence_state", "selected")),
+                ),
+                routing_provenance=(
+                    RoutingSnapshot.model_validate(request["routing_provenance"])
+                    if request.get("routing_provenance")
+                    else None
+                ),
+                delivery_recipient=request.get("delivery_recipient"),
+                delivery_thread_id=request.get("delivery_thread_id"),
+                delivery_subject=request.get("delivery_subject"),
             )
         )
 
-
-def _interrupt_payload(interrupts: Any) -> dict[str, Any] | None:
-    for item in interrupts:
-        value = getattr(item, "value", item)
-        if isinstance(value, dict):
-            return dict(value)
-    return None
+    def _restore_cached_run(self, outcome: ClientOutcome, *, thread_id: str) -> WorkflowRun:
+        events = (
+            [
+                event.model_dump(mode="json")
+                for event in self.database.list_events(outcome.workflow_run_id)
+            ]
+            if self.database is not None
+            else []
+        )
+        review_request = None
+        if self.reviews is not None and outcome.review_id is not None:
+            review = self.reviews.find(outcome.review_id)
+            review_request = review.model_dump(mode="json") if review is not None else None
+        return WorkflowRun(
+            outcome=outcome,
+            thread_id=thread_id,
+            review_request=review_request,
+            events=events,
+        )

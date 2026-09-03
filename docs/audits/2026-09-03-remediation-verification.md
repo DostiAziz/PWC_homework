@@ -19,10 +19,10 @@ runtime (Ollama `gpt-oss:20b`, `nomic-embed-text`, Chroma, SQLite), not from a s
 | Decomposition into subtasks and independent execution | **Unmet** | **Met** | Typed `WorkPlan`, `Send` fan-out, reducer join, cross-task citation renumbering |
 | Intermediate state management | Met | Met | Reducers on every concurrently written slice |
 | Two workflow tools including one non-retrieval | **Unmet** | **Met** | `CaseTool` and `MailboxTool` called from the executable path |
-| Dedicated modular RAG subgraph | **Unmet** | **Met** | `rag/subgraph.py`: four nodes, own state, `checkpointer=False` |
+| Dedicated modular RAG subgraph | **Unmet** | **Met** | `rag/subgraph.py`: four nodes and own stateless state |
 | Text data source with quality processing | Met | Met | Plus manifest validation and the cosine-space fix |
 | No paid API; local model with trade-off justification | Partial | Met | Measured memory, concurrency, model-swap and token-cap trade-offs |
-| Streamlit UI showing agent steps and RAG output | Partial | Met | Node/timing/task/tool/evidence trace; review resumes the checkpointed graph |
+| Streamlit UI showing agent steps and RAG output | Partial | Met | Node/timing/task/tool/evidence trace; review decisions dispatch asynchronously |
 | Mandatory Dockerfile; Compose advantageous | Partial | Met | Image built; full Compose stack run and smoke-tested |
 | Functional evaluation set of 10–20 questions | **Unmet** | **Met** | 16 cases, six criteria, scored against the real runtime |
 | Load test of 50–200 queries with bottleneck analysis | **Unmet** | **Met** | 100 requests, p50/p95/p99, node profile, measured bottleneck |
@@ -53,16 +53,22 @@ withheld correctly grounded answers as unattributed — reproduced in the contai
 cited answer was replaced by the abstention message. Fixed by normalising lookalike bracket pairs
 before verification, without weakening the check that catches markers matching no retrieved source.
 
-**4. One checkpoint namespace was shared across a conversation.** Every message in a chat reused
-the conversation id as the LangGraph thread id, so each run replayed and accumulated the previous
-enquiry's state — a paused run reported ten visited nodes when it had reached two. Fixed by giving
-each run its own namespace (`run-<run_id>`) while the conversation id and the channel thread id stay
-stable. Covered by regression tests.
+**4. The live checkpoint/resume path was coupled to the client request.** The current implementation
+uses the database-backed review queue instead: `human_review` returns a pending acknowledgement,
+and a later `ReviewService` decision creates an idempotent outbox delivery. The legacy nullable
+checkpoint column remains only for schema compatibility. Covered by the asynchronous review tests.
 
-Also fixed: the Streamlit `ExitStack` was garbage-collected, closing the SQLite checkpoint
-connection and breaking every resume; `scripts/ingest_corpus.py` hardcoded `PersistentClient` and
-so ignored `CHROMA_MODE=http`, leaving the Compose Chroma service empty; escalated enquiries got no
-case record because triage routed past `case_tools`.
+**5. Review delivery lost the original recipient, thread, and subject.** The decision path used
+hard-coded mailbox metadata. Fixed by persisting delivery metadata in `ReviewRequest` and using it
+when creating the reviewed-response outbox row.
+
+**6. Inbound deduplication ran after the graph.** Completed claims were ignored, so a retry from a
+new service instance created a second run. Fixed by claiming before execution, restoring the stored
+outcome for completed claims, and recording the routing snapshot under the active claim.
+
+Also fixed: `scripts/ingest_corpus.py` previously hardcoded `PersistentClient` and ignored
+`CHROMA_MODE=http`, leaving the Compose Chroma service empty; escalated enquiries got no case record
+because triage routed past `case_tools`.
 
 ## Behavioural corrections from the audit
 
@@ -81,7 +87,7 @@ case record because triage routed past `case_tools`.
 
 | Check | Result |
 |---|---|
-| `pytest` | 73 passed (was 30) |
+| `pytest` | 133 passed |
 | `ruff check src tests scripts app.py streamlit_app.py` | Passed |
 | `mypy` strict, `src` + `tests` | Passed, 56 files |
 | Evaluation, 16 cases, real runtime | 100%, all six criteria; 43.5 s |
@@ -91,12 +97,10 @@ case record because triage routed past `case_tools`.
 | `docker build` | Image built |
 | `docker compose up` full stack | Chroma healthy, ingest completed, app healthy |
 | Container end-to-end answer | Answered with four citations via host Ollama and the Chroma service |
-| Streamlit UI, browser-driven | Grounded answer with trace; escalation paused at two nodes; specialist decision resumed the checkpointed run; email delivered to the outbox on its thread |
+| Streamlit UI, browser-driven | Grounded answer with trace; escalation queued durably; specialist decision delivered through the persisted email thread |
 
 ## Remaining limitations
 
-Documented in the README rather than silently left open: review resumption maps a review to its
-checkpoint namespace in Streamlit session state, so reviews from an earlier session show a notice
-instead of a resume button; `request_revision` is terminal rather than looping; message
-deduplication is unimplemented; retrieval thresholds are calibrated to an eight-chunk corpus and
-are not benchmarked at scale.
+Documented in the README rather than silently left open: `request_revision` is terminal rather than
+looping; retrieval thresholds are calibrated to an eight-chunk corpus and are not benchmarked at
+scale.

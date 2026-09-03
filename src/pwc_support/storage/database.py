@@ -58,6 +58,7 @@ class Database:
                     routing_provenance_json TEXT,
                     delivery_recipient TEXT,
                     delivery_thread_id TEXT,
+                    delivery_subject TEXT,
                     created_at TEXT,
                     updated_at TEXT
                 );
@@ -156,7 +157,9 @@ class Database:
                     ON review_requests(case_id, response_version);
                 """
             )
-            retail_schema = Path(__file__).with_name("retail_schema.sql").read_text(encoding="utf-8")
+            retail_schema = (
+                Path(__file__).with_name("retail_schema.sql").read_text(encoding="utf-8")
+            )
             connection.executescript(retail_schema)
             # `CREATE TABLE IF NOT EXISTS` leaves a database made by an earlier version
             # untouched, so columns added later are backfilled explicitly.
@@ -177,12 +180,17 @@ class Database:
                 "routing_provenance_json",
                 "delivery_recipient",
                 "delivery_thread_id",
+                "delivery_subject",
                 "created_at",
                 "updated_at",
             ):
                 self._add_missing_column(connection, "review_requests", column, "TEXT")
-            self._add_missing_column(connection, "return_requests", "version", "INTEGER NOT NULL DEFAULT 1")
-            self._add_missing_column(connection, "refund_requests", "version", "INTEGER NOT NULL DEFAULT 1")
+            self._add_missing_column(
+                connection, "return_requests", "version", "INTEGER NOT NULL DEFAULT 1"
+            )
+            self._add_missing_column(
+                connection, "refund_requests", "version", "INTEGER NOT NULL DEFAULT 1"
+            )
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_cases_inbound_message
@@ -196,8 +204,7 @@ class Database:
         connection: sqlite3.Connection, table: str, column: str, declaration: str
     ) -> None:
         existing = {
-            str(row["name"])
-            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
         }
         if column not in existing:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")

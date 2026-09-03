@@ -59,9 +59,7 @@ def build_classifier(
 
 
 def test_classifier_routine_result_does_not_add_review() -> None:
-    classifier, _ = build_classifier(
-        [{"route": "routine", "categories": [], "confidence": 0.92}]
-    )
+    classifier, _ = build_classifier([{"route": "routine", "categories": [], "confidence": 0.92}])
 
     semantic = classifier.classify(enquiry="What services do you provide to banks?")
     deterministic = ReviewPolicy.default().evaluate("What services do you provide to banks?")

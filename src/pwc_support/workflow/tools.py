@@ -106,8 +106,11 @@ class CaseTool:
             tool=self.name,
             operation="close_case",
             ok=True,
-            detail={"case_id": record.case_id, "status": record.status.value,
-                    "version": record.version},
+            detail={
+                "case_id": record.case_id,
+                "status": record.status.value,
+                "version": record.version,
+            },
         )
 
 
@@ -119,9 +122,7 @@ class MailboxTool:
     def __init__(self, mailbox: MailboxAdapter) -> None:
         self.mailbox = mailbox
 
-    def deliver(
-        self, *, thread_id: str, recipient: str, subject: str, body: str
-    ) -> ToolCall:
+    def deliver(self, *, thread_id: str, recipient: str, subject: str, body: str) -> ToolCall:
         try:
             sent = self.mailbox.send(
                 thread_id=thread_id, recipient=recipient, subject=subject, body=body
@@ -151,4 +152,3 @@ class Toolbox:
 
     case_tool: CaseTool | None = None
     mailbox_tool: MailboxTool | None = None
-    retail_tools: list[Any] | None = None

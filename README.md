@@ -3,7 +3,7 @@
 A local Python + LangGraph agentic-RAG prototype for PwC-style business-client support. A client
 asks a general question about publicly described PwC services. The workflow triages the enquiry,
 decomposes it into independent tasks, retrieves attributed evidence through a dedicated RAG
-subgraph, verifies that the draft is grounded, and either releases a cited answer or pauses for a
+subgraph, verifies that the draft is grounded, and either releases a cited answer or queues it for a
 named specialist. Everything runs locally: no paid API, no external service, no real client data.
 
 ## Contents
@@ -13,7 +13,7 @@ named specialist. Everything runs locally: no paid API, no external service, no 
 - [Workflow nodes and routing](#workflow-nodes-and-routing)
 - [The RAG subgraph](#the-rag-subgraph)
 - [Tools](#tools)
-- [Human review, checkpoints and resumption](#human-review-checkpoints-and-resumption)
+- [Human review and asynchronous delivery](#human-review-and-asynchronous-delivery)
 - [Knowledge base](#knowledge-base)
 - [Model choice and trade-offs](#model-choice-and-trade-offs)
 - [Evaluation results](#evaluation-results)
@@ -39,13 +39,13 @@ A single prompt cannot serve both. This is a workflow problem:
 - **Answers must be attributable.** Every released claim carries a citation marker that resolves to
   a retrieved chunk; a draft that cites nothing, or cites a source that was never retrieved, is
   withheld rather than sent.
-- **Some work belongs to a human.** The run pauses mid-graph, durably, and resumes on the
-  specialist's decision instead of restarting.
+- **Some work belongs to a human.** The run creates a durable review record and returns a pending
+  acknowledgement. A specialist decision later creates an idempotent outbox delivery.
 - **Not every message deserves an answer.** Greetings, one-word fragments, and out-of-scope
   questions get deterministic replies without touching retrieval or the LLM.
 
-LangGraph provides explicit state transitions, fan-out with `Send`, reducer-based joins, and
-durable interrupt/resume — the four things this workflow actually needs.
+LangGraph provides explicit state transitions, fan-out with `Send`, and reducer-based joins, which
+are the workflow capabilities used here.
 
 ## Architecture
 
@@ -91,8 +91,8 @@ durable interrupt/resume — the four things this workflow actually needs.
 | Workflow | `workflow/tools.py` | Non-retrieval tools: case management, simulated mailbox |
 | Retrieval | `rag/subgraph.py` | The independently compiled four-node RAG `StateGraph` |
 | Retrieval | `rag/store.py`, `rag/lexical.py`, `rag/ingest.py` | Chroma (cosine), SQLite FTS5/BM25, chunking and manifest validation |
-| Storage | `storage/` | SQLite cases, review requests, operational events; LangGraph checkpoints |
-| Service | `services/client_support.py` | Channel contract, run assembly, persistence, review resumption |
+| Storage | `storage/` | SQLite cases, review requests, inbound claims, outbox and operational events |
+| Service | `services/client_support.py` | Channel contract, run assembly, persistence, durable review queue |
 | Adapters | `adapters/simulated_mailbox.py`, `llm/ollama.py` | File-backed mailbox; local Ollama generation and embeddings |
 
 `SupportState` is a typed `TypedDict` whose concurrent slices carry reducers, because fan-out
@@ -114,7 +114,7 @@ Eleven nodes, all reachable and all doing independent work:
 | `compose_reply` | Merges per-task answers into one reply with a single citation series |
 | `verify_response` | Grounding gate: evidence present, markers real, claims attributed |
 | `respond_directly` | Deterministic greeting, clarification, and abstention replies |
-| `human_review` | Interrupts durably; applies the specialist's decision on resume |
+| `human_review` | Persists a review packet and returns a pending acknowledgement |
 | `finalise_case` | Closes the case and delivers through the channel's tool |
 
 **Decomposition.** `plan_work` splits a multi-part enquiry into one knowledge task per substantive
@@ -151,9 +151,8 @@ costs ~20 ms and no tokens.
    builds the citation set. If nothing qualifies it routes straight to `END`.
 4. `answer_with_citations` — generates strictly from the selected evidence at temperature 0.
 
-It is compiled with `checkpointer=False`. The subgraph never interrupts, and the main graph fans
-several knowledge tasks onto the same instance within one superstep, which would otherwise collide
-in a single inherited checkpoint namespace. Skipping generation when no evidence clears the
+The subgraph is stateless and never interrupts. The main graph fans several knowledge tasks onto
+the same instance within one superstep. Skipping generation when no evidence clears the
 threshold is what makes an out-of-scope question cost ~35 ms instead of ~4 s.
 
 `build_rag_graph(generate=False)` compiles the same three retrieval nodes *without* step 4. That is
@@ -176,28 +175,21 @@ the outcome and bumps its version. On the simulated email channel the reply is d
 `SimulatedMailbox` on the original thread id. Each invocation is recorded as an auditable
 `ToolCall` and surfaced in the UI trace.
 
-## Human review, checkpoints and resumption
+## Human review and asynchronous delivery
 
-A risk-classified enquiry reaches `human_review`, which calls LangGraph's `interrupt()` with the
-case, categories, original message, retrieved background sources, proposed reply and proposed
-actions. The run is checkpointed to SQLite (`data/state/checkpoints.sqlite3`) and the
-`ReviewRequest` is persisted to the operations database, so it survives a process restart.
+A risk-classified enquiry reaches `human_review`, which persists the case, categories, original
+message, retrieved background sources, proposed actions, routing provenance, and the original
+delivery recipient, thread, and subject. The graph then returns a pending acknowledgement. No
+checkpoint or live graph execution is held open while a specialist works.
 
-The reviewer tab lists pending reviews and submits a typed `ReviewDecision`
-(`approve`, `edit`, `reject`, `request_revision`, `take_ownership`). `ClientSupportService.resume`
-replays the paused run with `Command(resume=...)`; the graph applies the decision, closes the case
-and delivers the reply. **The client's reply is produced by the workflow, not by the UI.**
-`request_revision` has no redraft loop, so it is handled like `take_ownership` — the enquiry stays
-with the specialist. It never falls through to approving the draft it just rejected.
+The reviewer tab lists pending reviews and submits a version-checked decision through
+`ReviewService`. An approving decision creates one idempotent outbox message using the persisted
+delivery metadata, then `OutboxDispatcher` writes it to the SQLite mailbox. Rejection closes the
+case without delivery. The customer's reply is produced by the workflow and delivery service, not
+by the UI.
 
-The paused run's checkpoint namespace is stored on the `ReviewRequest` itself, so the queue carries
-everything resume needs. A review raised before a restart, or in someone else's browser session, is
-still resumable from the reviewer tab; the page holds no state of its own.
-
-Each enquiry gets its own checkpoint namespace (`run-<run_id>`) while the conversation id stays
-stable across messages. Sharing one namespace across a conversation makes every later run replay
-and accumulate the previous enquiry's state — the channel thread (an email conversation) and the
-checkpoint namespace are deliberately separate identifiers.
+Inbound provider message IDs are claimed before workflow execution. A completed claim restores the
+stored `ClientOutcome` after a process restart, so retries do not run the graph or duplicate events.
 
 ## Knowledge base
 
@@ -364,7 +356,7 @@ PYTHONPATH=src .venv/bin/streamlit run app.py
 Quality gates:
 
 ```bash
-PYTHONPATH=src .venv/bin/pytest -q          # 79 unit tests
+PYTHONPATH=src .venv/bin/pytest -q          # 133 tests
 PYTHONPATH=src .venv/bin/ruff check src tests scripts app.py
 PYTHONPATH=src .venv/bin/mypy src tests     # strict mode
 ```
@@ -417,7 +409,7 @@ src/pwc_support/
   domain/                 # models, typed state, error codes
   workflow/               # graph, policy, tools, reducers
   rag/                    # subgraph, store, lexical index, ingestion
-  storage/                # SQLite database, repositories, checkpoints
+  storage/                # SQLite database and repositories
   services/               # ClientSupportService
   adapters/, llm/         # simulated mailbox, Ollama
 app.py                    # Streamlit UI (chat, email, review)
@@ -425,7 +417,7 @@ scripts/                  # check_runtime, ingest_corpus, run_evaluation, run_lo
 corpus/                   # manifest + five Markdown sources
 eval/                     # final.jsonl (16 cases), development.jsonl, load_workload.jsonl
 artifacts/                # measured evaluation and load results
-tests/                    # 79 unit tests with in-memory doubles
+tests/                    # 133 tests with in-memory doubles
 docs/audits/              # requirements audit
 ```
 

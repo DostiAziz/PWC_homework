@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from threading import BoundedSemaphore
 from typing import Any, TypeVar
 
 import ollama
@@ -34,11 +35,17 @@ class OllamaGenerator:
         *,
         temperature: float = 0.0,
         request_timeout_seconds: float | None = None,
+        num_ctx: int | None = None,
+        schema_tokens: int = 256,
+        max_parallel_generations: int = 1,
     ) -> None:
         self.client = client
         self.model = model
         self.temperature = temperature
         self.request_timeout_seconds = request_timeout_seconds
+        self.num_ctx = num_ctx
+        self.schema_tokens = schema_tokens
+        self._generation_slots = BoundedSemaphore(max_parallel_generations)
 
     @classmethod
     def from_connection(
@@ -48,6 +55,9 @@ class OllamaGenerator:
         model: str,
         request_timeout_seconds: float,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
+        schema_tokens: int = 256,
+        max_parallel_generations: int = 1,
     ) -> OllamaGenerator:
         """Build an adapter whose HTTP transport enforces the request deadline."""
         client = ollama.Client(host=host, timeout=request_timeout_seconds)
@@ -56,6 +66,9 @@ class OllamaGenerator:
             model,
             temperature=temperature,
             request_timeout_seconds=request_timeout_seconds,
+            num_ctx=num_ctx,
+            schema_tokens=schema_tokens,
+            max_parallel_generations=max_parallel_generations,
         )
 
     def structured(
@@ -68,15 +81,18 @@ class OllamaGenerator:
     ) -> ModelT:
         selected_temperature = self.temperature if temperature is None else temperature
         try:
-            response = self.client.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                format=schema.model_json_schema(),
-                options={"temperature": selected_temperature},
-            )
+            with self._generation_slots:
+                response = self.client.chat(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    format=schema.model_json_schema(),
+                    options=self._options(
+                        temperature=selected_temperature, max_tokens=self.schema_tokens
+                    ),
+                )
         except TimeoutException as error:
             raise TimeoutError("structured Ollama request timed out") from error
 
@@ -101,12 +117,28 @@ class OllamaGenerator:
         max_tokens: int = 512,
         temperature: float = 0.2,
     ) -> str:
-        response = self.client.chat(
-            model=self.model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            options={"temperature": temperature, "num_predict": max_tokens},
-        )
+        try:
+            with self._generation_slots:
+                response = self.client.chat(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    options=self._options(temperature=temperature, max_tokens=max_tokens),
+                )
+        except TimeoutException as error:
+            raise TimeoutError("text Ollama request timed out") from error
         return str(response["message"]["content"]).strip()
+
+    def _options(self, *, temperature: float, max_tokens: int) -> dict[str, float | int]:
+        options: dict[str, float | int] = {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        }
+        if self.num_ctx is not None:
+            options["num_ctx"] = self.num_ctx
+        return options
 
 
 class OllamaContextualizer:
@@ -116,9 +148,7 @@ class OllamaContextualizer:
         self.generator = generator
         self.max_document_chars = max_document_chars
 
-    def contextualize(
-        self, *, document: CorpusDocument, heading: str, chunk: str
-    ) -> str:
+    def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str:
         bounded_document = document.text[: self.max_document_chars]
         return self.generator.text(
             system=(
