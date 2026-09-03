@@ -156,6 +156,8 @@ class Database:
                     ON review_requests(case_id, response_version);
                 """
             )
+            retail_schema = Path(__file__).with_name("retail_schema.sql").read_text(encoding="utf-8")
+            connection.executescript(retail_schema)
             # `CREATE TABLE IF NOT EXISTS` leaves a database made by an earlier version
             # untouched, so columns added later are backfilled explicitly.
             self._add_missing_column(connection, "review_requests", "evidence_json", "TEXT")
