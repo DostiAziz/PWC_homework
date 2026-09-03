@@ -27,9 +27,20 @@ def request_return(
     reason: str,
     idempotency_key: str,
     now: datetime | None = None,
+    auto_approval_limit: Decimal = Decimal("100.00"),
 ) -> tuple[ReturnRequest | None, ReturnEligibility]:
     eligibility = evaluate_return(repository, order_id=order_id, item_id=item_id, reason=reason, now=now)
-    if not eligibility.eligible or eligibility.refund_amount > Decimal("100.00") or eligibility.risk_flags:
-        return None, eligibility.model_copy(update={"risk_flags": eligibility.risk_flags or (RetailActionRisk.FINANCIAL,)})
-    request = ReturnRequest(return_id=f"RET-{uuid4().hex[:8].upper()}", order_id=order_id, item_id=item_id, reason=reason, status="approved", idempotency_key=idempotency_key)
-    return repository.create(request), eligibility
+    if not eligibility.eligible:
+        return None, eligibility
+    risk_flags = eligibility.risk_flags
+    if eligibility.refund_amount > auto_approval_limit:
+        risk_flags = risk_flags or (RetailActionRisk.FINANCIAL,)
+    request = ReturnRequest(
+        return_id=f"RET-{uuid4().hex[:8].upper()}",
+        order_id=order_id,
+        item_id=item_id,
+        reason=reason,
+        status="pending_review" if risk_flags else "approved",
+        idempotency_key=idempotency_key,
+    )
+    return repository.create(request), eligibility.model_copy(update={"risk_flags": risk_flags})

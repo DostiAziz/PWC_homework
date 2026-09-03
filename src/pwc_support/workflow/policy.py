@@ -50,6 +50,8 @@ class ReviewPolicy:
     policy_version = "rules-v1"
 
     _rules: tuple[_PolicyRule, ...] = (
+        _rule("retail_return_request", ReviewCategory.EXTERNAL_ACTION, r"\b(?:return|send back)\b"),
+        _rule("retail_refund_request", ReviewCategory.EXTERNAL_ACTION, r"\brefund\b"),
         _rule("confidentiality_confidential", ReviewCategory.CONFIDENTIALITY, r"confidential"),
         _rule("confidentiality_data_breach", ReviewCategory.CONFIDENTIALITY, r"data breach"),
         _rule("confidentiality_cybersecurity", ReviewCategory.CONFIDENTIALITY, r"cyber ?security"),

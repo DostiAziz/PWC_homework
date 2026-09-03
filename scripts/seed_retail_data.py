@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 
 from pwc_support.storage.database import Database

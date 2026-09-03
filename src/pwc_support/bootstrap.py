@@ -14,7 +14,7 @@ from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
 from pwc_support.storage.database import Database
 from pwc_support.storage.repositories import CaseRepository, ReviewRepository, OutboxRepository, MailboxRepository
-from pwc_support.storage.retail_repositories import ProductRepository, OrderRepository
+from pwc_support.storage.retail_repositories import ProductRepository, OrderRepository, ReturnRepository
 from pwc_support.workflow.retail_tools import build_retail_tools
 from pwc_support.services.review import OutboxDispatcher, ReviewService
 from pwc_support.workflow.graph import build_graph
@@ -74,7 +74,7 @@ def build_runtime(
     )
     graph = build_graph(
         risk_classifier=risk_classifier,
-        retail_tools=build_retail_tools(ProductRepository(retail_database), OrderRepository(retail_database), "CUS-1001"),
+        retail_tools=build_retail_tools(ProductRepository(retail_database), OrderRepository(retail_database), "CUS-1001", ReturnRepository(retail_database, resolved.return_window_days), resolved.refund_auto_approval_limit),
         rag_answerer=RagAnswerer(
             knowledge_base,
             generator,

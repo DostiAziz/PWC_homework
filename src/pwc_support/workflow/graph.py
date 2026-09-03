@@ -159,7 +159,9 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
-        if any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer")):
+        retail_lookup = any(word in body.casefold() for word in ("product", "jacket", "backpack", "headphones", "offer"))
+        retail_action = any(word in body.casefold() for word in ("return", "refund", "send back"))
+        if retail_lookup and not retail_action and not decision.requires_review:
             route = Route.PLAN
         semantic = None
         failure_class = None
@@ -228,12 +230,26 @@ def build_graph(
         relevant published sources already in front of them instead of a blank box.
         """
         started = time.perf_counter()
+        body = str(state["message"]["body"])
+        if retail_tools and any(word in body.casefold() for word in ("return", "refund")) and len(retail_tools) > 3:
+            order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
+            item_match = re.search(r"\bITEM-[A-Z0-9-]+\b", body, re.IGNORECASE)
+            if order_match and item_match:
+                action = retail_tools[3].invoke({
+                    "order_id": order_match.group(0).upper(),
+                    "item_id": item_match.group(0).upper(),
+                    "reason": body,
+                    "idempotency_key": f"chat-{state['run_id']}",
+                })
+                return {
+                    "action_proposal": action,
+                    "events": [_event("gather_evidence", "retail_return_evaluated", started, status=(action.get("return") or {}).get("status"))],
+                }
         if rag_answerer is None:
             return {
                 "events": [_event("gather_evidence", "skipped", started,
                                   reason="no_retrieval_runtime")]
             }
-        body = str(state["message"]["body"])
         bundle = rag_answerer.gather_evidence(RagRequest(question=body))
         return {
             "evidence": bundle.model_dump(mode="json"),
@@ -528,7 +544,7 @@ def build_graph(
             "categories": state["triage"].get("review_categories", []),
             "original_message": state["message"]["body"],
             "proposed_reply": state.get("draft", {}),
-            "proposed_actions": state.get("proposed_actions", []),
+            "proposed_actions": state.get("proposed_actions", []) + ([{"action_type": "retail_return", "description": "Return eligibility and refund proposal", "requires_review": True, "details": state["action_proposal"]}] if state.get("action_proposal") else []),
             # Only the triage path carries background evidence; an enquiry escalated
             # after drafting arrives with a draft that already cites its own sources.
             "evidence": state.get("evidence", {}).get("citations", []),

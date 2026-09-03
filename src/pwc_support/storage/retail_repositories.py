@@ -60,3 +60,19 @@ class ReturnRepository:
             if existing: return ReturnRequest(return_id=existing["return_id"], order_id=existing["order_id"], item_id=existing["item_id"], reason=existing["reason"], status=existing["status"], idempotency_key=existing["idempotency_key"])
             c.execute("INSERT INTO return_requests VALUES (?,?,?,?,?,?,?)", (request.return_id,request.order_id,request.item_id,request.reason,request.status,request.idempotency_key,datetime.now(UTC).isoformat()))
         return request
+
+
+class RefundRepository:
+    """Durable refund proposals, kept separate from payment execution."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def propose(self, return_request: ReturnRequest, amount: Decimal) -> dict[str, object]:
+        refund_id = f"REF-{return_request.return_id.removeprefix('RET-')}"
+        with self.database.connect() as c:
+            c.execute(
+                "INSERT OR IGNORE INTO refund_requests (refund_id,return_id,amount,status,payment_reference,created_at) VALUES (?,?,?,?,?,?)",
+                (refund_id, return_request.return_id, str(amount), "pending_review", None, datetime.now(UTC).isoformat()),
+            )
+        return {"refund_id": refund_id, "return_id": return_request.return_id, "amount": amount, "status": "pending_review"}
