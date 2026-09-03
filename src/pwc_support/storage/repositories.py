@@ -323,8 +323,8 @@ class InboundRepository:
                 )
             if row["status"] == "completed":
                 return InboundClaimResult(status="completed")
-            expiry = _dt(row["lease_expires_at"])
-            if expiry and expiry > now:
+            existing_expiry = _dt(row["lease_expires_at"])
+            if existing_expiry and existing_expiry > now:
                 return InboundClaimResult(status="in_progress")
             token = str(uuid4())
             new_expiry = now + timedelta(seconds=lease_seconds)
