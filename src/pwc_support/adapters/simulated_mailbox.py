@@ -7,13 +7,17 @@ from typing import Any, cast
 from uuid import uuid4
 
 from pwc_support.domain.models import Channel, IncomingMessage
+from pwc_support.domain.models import MessageKind, OutboundMessage
+from pwc_support.storage.database import Database
+from pwc_support.storage.repositories import MailboxRepository
 
 
 class SimulatedMailbox:
     """File-backed inbox/outbox adapter with stable email thread identifiers."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, database: Database | None = None) -> None:
         self.path = path
+        self.database = database
 
     def receive(self, *, sender: str, subject: str, body: str) -> IncomingMessage:
         thread_id = f"thread-{uuid4()}"
@@ -24,6 +28,9 @@ class SimulatedMailbox:
             subject=subject, body=body, language="en", received_at=datetime.now(UTC),
         )
         self._append("inbox", message.model_dump(mode="json"))
+        if self.database is not None:
+            with self.database.connect() as connection:
+                connection.execute("INSERT OR IGNORE INTO inbound_messages (provider,provider_message_id,payload_hash,message_json,conversation_id,provider_thread_id,sender_id,recipient_id,subject,body,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (message.provider, message.provider_message_id, str(hash(message.body)), message.model_dump_json(), str(message.conversation_id), message.provider_thread_id, message.sender_id, message.recipient_id, message.subject, message.body, "received", message.received_at.isoformat()))
         return message
 
     def send(self, *, thread_id: str, recipient: str, subject: str, body: str) -> IncomingMessage:
@@ -34,6 +41,9 @@ class SimulatedMailbox:
             subject=subject, body=body, language="en", received_at=datetime.now(UTC),
         )
         self._append("outbox", message.model_dump(mode="json"))
+        if self.database is not None:
+            OutboxMailbox = MailboxRepository(self.database)
+            OutboxMailbox.deliver(OutboundMessage(delivery_key=f"email:{message.provider_message_id}", kind=MessageKind.AUTOMATIC_ANSWER, recipient=recipient, thread_id=thread_id, subject=subject, body=body, payload_hash=str(hash(body))))
         return message
 
     def outbox(self) -> list[IncomingMessage]:

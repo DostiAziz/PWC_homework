@@ -61,7 +61,7 @@ def build_runtime(
     database.initialize()
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
-    mailbox = SimulatedMailbox(resolved.mailbox_path)
+    mailbox = SimulatedMailbox(resolved.mailbox_path, database=database)
     graph = build_graph(
         rag_answerer=RagAnswerer(
             knowledge_base,
