@@ -3,11 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+import ollama
+from httpx import TimeoutException
+from pydantic import BaseModel, ValidationError
 
 from pwc_support.rag.ingest import CorpusDocument
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+class StructuredOutputInvalid(ValueError):
+    """A model response could not be decoded and validated against its schema."""
 
 
 class OllamaEmbedder:
@@ -21,20 +27,71 @@ class OllamaEmbedder:
 
 
 class OllamaGenerator:
-    def __init__(self, client: Any, model: str, *, temperature: float = 0.0) -> None:
+    def __init__(
+        self,
+        client: Any,
+        model: str,
+        *,
+        temperature: float = 0.0,
+        request_timeout_seconds: float | None = None,
+    ) -> None:
         self.client = client
         self.model = model
         self.temperature = temperature
+        self.request_timeout_seconds = request_timeout_seconds
 
-    def structured(self, *, system: str, user: str, schema: type[ModelT]) -> ModelT:
-        response = self.client.chat(
-            model=self.model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            format=schema.model_json_schema(),
-            options={"temperature": self.temperature},
+    @classmethod
+    def from_connection(
+        cls,
+        *,
+        host: str,
+        model: str,
+        request_timeout_seconds: float,
+        temperature: float = 0.0,
+    ) -> OllamaGenerator:
+        """Build an adapter whose HTTP transport enforces the request deadline."""
+        client = ollama.Client(host=host, timeout=request_timeout_seconds)
+        return cls(
+            client,
+            model,
+            temperature=temperature,
+            request_timeout_seconds=request_timeout_seconds,
         )
-        content = response["message"]["content"]
-        return schema.model_validate(json.loads(content))
+
+    def structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[ModelT],
+        temperature: float | None = None,
+    ) -> ModelT:
+        selected_temperature = self.temperature if temperature is None else temperature
+        try:
+            response = self.client.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                format=schema.model_json_schema(),
+                options={"temperature": selected_temperature},
+            )
+        except TimeoutException as error:
+            raise TimeoutError("structured Ollama request timed out") from error
+
+        try:
+            content = response["message"]["content"]
+        except (KeyError, TypeError) as error:
+            raise StructuredOutputInvalid("structured response has no content") from error
+        try:
+            payload = json.loads(content)
+        except (json.JSONDecodeError, TypeError) as error:
+            raise StructuredOutputInvalid("structured response is not valid JSON") from error
+        try:
+            return schema.model_validate(payload)
+        except ValidationError as error:
+            raise StructuredOutputInvalid("structured response does not match schema") from error
 
     def text(
         self,
