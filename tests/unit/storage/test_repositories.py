@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from pwc_support.domain.models import (
     CaseRequest,
+    Citation,
     OperationalEvent,
     ReviewCategory,
     ReviewRequest,
@@ -65,3 +66,72 @@ def test_events_are_stored_without_message_content(tmp_path: Path) -> None:
     database.record_event(event)
 
     assert database.list_events(event.run_id)[0].details == {"route": "plan"}
+
+
+def test_review_survives_a_restart_with_its_checkpoint_and_evidence(tmp_path: Path) -> None:
+    """A queued review must be resumable by a process that did not create it."""
+    path = tmp_path / "operations.sqlite3"
+    review = ReviewRequest(
+        review_id=uuid4(),
+        case_id="DEMO-003",
+        run_id=uuid4(),
+        categories=frozenset({ReviewCategory.CONFIDENTIALITY}),
+        original_message="A confidential report may have leaked.",
+        evidence=(
+            Citation(
+                source_id="pwc-global-services",
+                chunk_id="chunk-1",
+                marker="[S1]",
+                title="PwC global services",
+                heading="Services",
+                excerpt="PwC describes assurance, tax and advisory services.",
+                similarity=0.82,
+            ),
+        ),
+        checkpoint_id="run-abc123",
+        response_version=1,
+    )
+
+    first = Database(path)
+    first.initialize()
+    ReviewRepository(first).create(review)
+
+    # A separate Database instance stands in for the next process.
+    restarted = Database(path)
+    restarted.initialize()
+    pending = ReviewRepository(restarted).list_pending()[0]
+
+    assert pending.checkpoint_id == "run-abc123"
+    assert [citation.source_id for citation in pending.evidence] == ["pwc-global-services"]
+
+
+def test_initialize_backfills_columns_on_a_database_from_an_earlier_version(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    legacy = Database(path)
+    with legacy.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE review_requests (
+                review_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                categories_json TEXT NOT NULL,
+                original_message TEXT NOT NULL,
+                proposed_reply_json TEXT,
+                proposed_actions_json TEXT NOT NULL,
+                response_version INTEGER NOT NULL,
+                status TEXT NOT NULL
+            )
+            """
+        )
+
+    legacy.initialize()
+
+    with legacy.connect() as connection:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(review_requests)").fetchall()
+        }
+    assert {"evidence_json", "checkpoint_id"} <= columns

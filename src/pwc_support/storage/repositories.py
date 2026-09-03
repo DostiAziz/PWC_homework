@@ -8,6 +8,7 @@ from pwc_support.domain.models import (
     CaseRecord,
     CaseRequest,
     CaseStatus,
+    Citation,
     DraftReply,
     ProposedAction,
     ReviewRequest,
@@ -93,8 +94,9 @@ class ReviewRepository:
                 """
                 INSERT OR IGNORE INTO review_requests
                 (review_id, case_id, run_id, categories_json, original_message,
-                 proposed_reply_json, proposed_actions_json, response_version, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 proposed_reply_json, proposed_actions_json, evidence_json, checkpoint_id,
+                 response_version, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(review.review_id),
@@ -104,6 +106,8 @@ class ReviewRepository:
                     review.original_message,
                     review.proposed_reply.model_dump_json() if review.proposed_reply else None,
                     json_object([action.model_dump() for action in review.proposed_actions]),
+                    json_object([citation.model_dump(mode="json") for citation in review.evidence]),
+                    review.checkpoint_id,
                     review.response_version,
                     review.status,
                 ),
@@ -133,6 +137,7 @@ class ReviewRepository:
     @staticmethod
     def _from_row(row: sqlite3.Row) -> ReviewRequest:
         proposed_reply_json = row["proposed_reply_json"]
+        evidence_json = row["evidence_json"]
         return ReviewRequest(
             review_id=UUID(row["review_id"]),
             case_id=row["case_id"],
@@ -148,6 +153,10 @@ class ReviewRepository:
                 ProposedAction.model_validate(item)
                 for item in json.loads(row["proposed_actions_json"])
             ),
+            evidence=tuple(
+                Citation.model_validate(item) for item in json.loads(evidence_json or "[]")
+            ),
+            checkpoint_id=row["checkpoint_id"],
             response_version=row["response_version"],
             status=row["status"],
         )
