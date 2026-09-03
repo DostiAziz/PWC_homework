@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from pwc_support.domain.models import (
     ReviewDecision,
     ReviewRequest,
 )
+from pwc_support.storage.repositories import InboundRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +62,8 @@ class ClientSupportService:
         self.database = database
         self.mailbox = mailbox
         self.review_service = review_service
+        self.inbound = InboundRepository(database) if database is not None else None
+        self._identity_runs: dict[tuple[str, str], WorkflowRun] = {}
 
     def submit(
         self,
@@ -70,10 +74,16 @@ class ClientSupportService:
         conversation_id: UUID | None = None,
         thread_id: str | None = None,
         subject: str | None = None,
+        provider_message_id: str | None = None,
     ) -> WorkflowRun:
         conversation = conversation_id or uuid4()
         run_id = uuid4()
         thread = thread_id or str(conversation)
+        provider = "local_chat" if channel is Channel.CHAT else "simulated_email"
+        identity = provider_message_id or f"message-{uuid4()}"
+        cached = self._identity_runs.get((provider, identity))
+        if cached is not None:
+            return cached
         # Each enquiry gets its own checkpoint namespace. Sharing one across a
         # conversation would replay and accumulate the previous enquiry's state.
         checkpoint_id = f"run-{run_id}"
@@ -96,13 +106,21 @@ class ClientSupportService:
             },
             config,
         )
-        return self._finish(
+        result = self._finish(
             state,
             conversation=conversation,
             run_id=run_id,
             thread_id=thread,
             checkpoint_id=checkpoint_id,
         )
+        self._identity_runs[(provider, identity)] = result
+        if self.inbound is not None:
+            claim = self.inbound.claim(
+                provider, identity, str(hash(body)), lease_seconds=300, now=datetime.now(UTC)
+            ).claim
+            if claim is not None:
+                self.inbound.complete(claim, result.outcome.model_dump(mode="json"))
+        return result
 
     def resume(self, *, checkpoint_id: str, decision: ReviewDecision) -> WorkflowRun:
         """Resume the checkpointed run that paused for a specialist decision."""

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 from typing import Any, Literal
@@ -28,6 +30,8 @@ from pwc_support.domain.state import SupportState
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.subgraph import to_rag_result
 from pwc_support.workflow.policy import ReviewPolicy
+from pwc_support.workflow.policy import merge_routing
+from pwc_support.domain.errors import RiskClassificationUnavailable
 from pwc_support.workflow.tools import Toolbox, find_case_reference
 
 MARKER = re.compile(r"\[S\d+\]")
@@ -113,6 +117,7 @@ def renumber_citations(
 def build_graph(
     *,
     policy: ReviewPolicy | None = None,
+    risk_classifier: Any = None,
     rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
     enable_interrupt: bool = False,
@@ -153,7 +158,42 @@ def build_graph(
         body = str(state["message"]["body"])
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
+        semantic = None
+        failure_class = None
+        if not decision.requires_review and route is Route.PLAN and risk_classifier is not None:
+            try:
+                semantic = risk_classifier.classify(enquiry=body)
+                requires_review, merged_categories = merge_routing(
+                    deterministic=decision, semantic=semantic
+                )
+                if requires_review:
+                    route = Route.REVIEW
+                    decision = decision.__class__(True, merged_categories, (), decision.policy_version)
+            except RiskClassificationUnavailable as error:
+                failure_class = error.failure_class
+                route = Route.UNSUPPORTED
         categories = sorted(category.value for category in decision.categories)
+        snapshot_payload = {
+            "body": body,
+            "route": route.value,
+            "categories": categories,
+            "semantic": semantic.model_dump(mode="json") if semantic else None,
+            "failure_class": failure_class,
+        }
+        snapshot_hash = hashlib.sha256(json.dumps(snapshot_payload, sort_keys=True).encode()).hexdigest()
+        snapshot = {
+            "input_fingerprint": hashlib.sha256(body.encode()).hexdigest(),
+            "provider_message_id": str(state.get("inbound_message_id") or state["run_id"]),
+            "policy_version": decision.policy_version,
+            "deterministic_match": bool(decision.matched_rule_ids),
+            "matched_rule_ids": list(decision.matched_rule_ids),
+            "classifier_invoked": semantic is not None,
+            "classifier_attempts": 1 if semantic is not None else 0,
+            "classifier": semantic.model_dump(mode="json") if semantic else None,
+            "failure_class": failure_class,
+            "pre_retrieval_route": route.value,
+            "snapshot_hash": snapshot_hash,
+        }
         return {
             "triage": {
                 "intent": "client_enquiry",
@@ -162,6 +202,7 @@ def build_graph(
                 "case_reference": find_case_reference(body),
                 "confidence": 0.9 if route is not Route.CLARIFY else 0.4,
             },
+            "routing_snapshot": snapshot,
             "events": [_event("triage", "completed", started, route=route.value,
                               review_categories=categories)],
         }
