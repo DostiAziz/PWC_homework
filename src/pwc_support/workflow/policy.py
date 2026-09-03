@@ -3,7 +3,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from pwc_support.domain.models import ReviewCategory
+from pwc_support.domain.models import ReviewCategory, Route
+
+GREETING = re.compile(
+    r"^(hi|hello|hey|hiya|good (?:morning|afternoon|evening)|greetings)"
+    r"(?: there| team| pwc| folks)?[\s!.,?]*$"
+)
+COURTESY = re.compile(r"^(thanks|thank you|cheers|ok|okay|got it|perfect|great)[\s!.,?]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +56,19 @@ class ReviewPolicy:
             if any(re.search(pattern, normalized) for pattern in patterns)
         )
         return PolicyDecision(requires_review=bool(categories), categories=categories)
+
+    def classify_route(self, text: str) -> Route:
+        """Deterministic first-pass routing before any model or retrieval call."""
+        normalized = " ".join(text.split()).casefold()
+        if not normalized:
+            return Route.CLARIFY
+        if self.evaluate(text).requires_review:
+            return Route.REVIEW
+        if GREETING.match(normalized) or COURTESY.match(normalized):
+            return Route.GREETING
+        if len(re.findall(r"[a-z0-9]+", normalized)) < 3:
+            return Route.CLARIFY
+        return Route.PLAN
 
     def after_retrieval(self, *, has_sufficient_evidence: bool) -> PolicyDecision:
         if has_sufficient_evidence:

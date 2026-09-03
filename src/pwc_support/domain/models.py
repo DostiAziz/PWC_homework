@@ -31,7 +31,9 @@ class OutcomeStatus(StrEnum):
 
 class Route(StrEnum):
     PLAN = "plan"
+    GREETING = "greeting"
     CLARIFY = "clarify"
+    UNSUPPORTED = "unsupported"
     REVIEW = "review"
 
 
@@ -161,7 +163,9 @@ class PlannedTask(DomainModel):
 
 
 class ProposedAction(DomainModel):
-    action_type: Literal["create_case", "update_case", "schedule", "send_document"]
+    action_type: Literal[
+        "create_case", "update_case", "schedule", "send_document", "deliver_email"
+    ]
     description: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
     requires_review: bool = True
 

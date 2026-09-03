@@ -37,3 +37,23 @@ def test_empty_evidence_requires_review() -> None:
 
     assert decision.requires_review is True
     assert ReviewCategory.INSUFFICIENT_EVIDENCE in decision.categories
+
+
+def test_greetings_and_courtesies_are_not_escalated() -> None:
+    policy = ReviewPolicy.default()
+
+    assert policy.classify_route("hi").value == "greeting"
+    assert policy.classify_route("Good morning there!").value == "greeting"
+    assert policy.classify_route("thanks").value == "greeting"
+
+
+def test_short_input_is_clarified_and_full_questions_are_planned() -> None:
+    policy = ReviewPolicy.default()
+
+    assert policy.classify_route("insurance?").value == "clarify"
+    assert policy.classify_route("").value == "clarify"
+    assert policy.classify_route("What services does PwC provide to banks?").value == "plan"
+
+
+def test_risk_language_still_wins_over_a_polite_opening() -> None:
+    assert ReviewPolicy.default().classify_route("Hello, we had a data breach.").value == "review"
