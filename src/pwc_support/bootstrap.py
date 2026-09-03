@@ -14,8 +14,9 @@ from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
 from pwc_support.storage.database import Database
 from pwc_support.storage.repositories import CaseRepository, ReviewRepository, OutboxRepository, MailboxRepository
-from pwc_support.storage.retail_repositories import ProductRepository, OrderRepository, ReturnRepository
+from pwc_support.storage.retail_repositories import ProductRepository, OrderRepository, RefundRepository, ReturnRepository
 from pwc_support.workflow.retail_tools import build_retail_tools
+from pwc_support.workflow.retail_actions import RetailApprovalService
 from pwc_support.services.review import OutboxDispatcher, ReviewService
 from pwc_support.workflow.graph import build_graph
 from pwc_support.workflow.risk_classifier import OllamaSemanticRiskClassifier
@@ -89,6 +90,7 @@ def build_runtime(
         max_planned_tasks=resolved.max_planned_tasks,
     )
     dispatcher = OutboxDispatcher(OutboxRepository(database), MailboxRepository(database), cases)
+    retail_approvals = RetailApprovalService(ReturnRepository(retail_database, resolved.return_window_days), RefundRepository(retail_database))
     return Runtime(
         settings=resolved,
         graph=graph,
@@ -97,6 +99,6 @@ def build_runtime(
         reviews=reviews,
         mailbox=mailbox,
         knowledge_base=knowledge_base,
-        review_service=ReviewService(reviews, dispatcher),
+        review_service=ReviewService(reviews, dispatcher, retail_approvals, frozenset(resolved.reviewer_ids)),
         dispatcher=dispatcher,
     )

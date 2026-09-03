@@ -336,15 +336,19 @@ def _render_review_card(service: ClientSupportService, review: ReviewRequest, di
         )
         reviewer = st.text_input("Reviewer", value="specialist-1", key=f"reviewer-{key}")
         if st.button("Submit decision", key=f"submit-{key}", type="primary"):
-            result = service.decide_review(
-                review_id=review.review_id,
-                decision_id=uuid4(),
-                expected_version=review.response_version,
-                reviewer_id=reviewer,
-                kind=ReviewDecisionKind(kind),
-                reviewed_text=edited or None,
-                reason="reviewer decision",
-            )
+            try:
+                result = service.decide_review(
+                    review_id=review.review_id,
+                    decision_id=uuid4(),
+                    expected_version=review.response_version,
+                    reviewer_id=reviewer,
+                    kind=ReviewDecisionKind(kind),
+                    reviewed_text=edited or None,
+                    reason="reviewer decision",
+                )
+            except PermissionError:
+                st.error("Reviewer identity is not authorized for this queue.")
+                return
             if dispatcher is not None and result.outbox_key:
                 dispatcher.dispatch_once(worker_id="streamlit-reviewer")
             st.success(f"Decision recorded: {result.case_status.value}")

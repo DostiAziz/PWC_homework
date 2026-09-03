@@ -360,10 +360,12 @@ class PlannedTask(DomainModel):
 
 class ProposedAction(DomainModel):
     action_type: Literal[
-        "create_case", "update_case", "schedule", "send_document", "deliver_email"
+        "create_case", "update_case", "schedule", "send_document", "deliver_email",
+        "retail_return", "retail_refund", "offer_replacement",
     ]
     description: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
     requires_review: bool = True
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkPlan(DomainModel):

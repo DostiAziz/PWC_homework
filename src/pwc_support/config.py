@@ -43,6 +43,7 @@ class Settings(BaseModel):
     retail_db_path: Path | None = None
     refund_auto_approval_limit: Decimal = Field(default=Decimal("100.00"), ge=0)
     return_window_days: int = Field(default=30, ge=1, le=365)
+    reviewer_ids: tuple[str, ...] = ("specialist-1",)
 
     @property
     def operations_db(self) -> Path:
@@ -97,4 +98,5 @@ class Settings(BaseModel):
             generation_model=os.getenv("PWC_GENERATION_MODEL", "gpt-oss:20b"),
             embedding_model=os.getenv("PWC_EMBEDDING_MODEL", "nomic-embed-text"),
             answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
+            reviewer_ids=tuple(item.strip() for item in os.getenv("PWC_REVIEWER_IDS", "specialist-1").split(",") if item.strip()),
         )

@@ -22,7 +22,7 @@ def _db(tmp_path: Path) -> Database:
 
 def test_product_order_and_exception_paths_are_distinct(tmp_path: Path) -> None:
     database = _db(tmp_path)
-    tools = build_retail_tools(ProductRepository(database), OrderRepository(database), "CUS-1", ReturnRepository(database))
+    tools = build_retail_tools(ProductRepository(database), OrderRepository(database), "C-1", ReturnRepository(database))
     graph = build_graph(retail_tools=tools)
     product = graph.invoke({"message": {"body": "Show me a jacket", "sender_id": "C-1"}})
     order = graph.invoke({"message": {"body": "What is the status of order ORD-1?", "sender_id": "C-1"}})

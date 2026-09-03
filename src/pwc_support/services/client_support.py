@@ -11,11 +11,13 @@ from pwc_support.domain.models import (
     Channel,
     Citation,
     ClientOutcome,
+    DraftReply,
     OperationalEvent,
     OutcomeStatus,
     ReviewCategory,
     ReviewDecision,
     ReviewRequest,
+    ProposedAction,
 )
 from pwc_support.storage.repositories import InboundRepository
 
@@ -250,6 +252,14 @@ class ClientSupportService:
                 original_message=str(request.get("original_message", "")),
                 evidence=tuple(
                     Citation.model_validate(item) for item in request.get("evidence", [])
+                ),
+                proposed_reply=(
+                    DraftReply.model_validate(request["proposed_reply"])
+                    if request.get("proposed_reply") else None
+                ),
+                proposed_actions=tuple(
+                    ProposedAction.model_validate(item)
+                    for item in request.get("proposed_actions", [])
                 ),
                 # Stored so a later session can resume this paused run from the queue.
                 checkpoint_id=checkpoint_id,

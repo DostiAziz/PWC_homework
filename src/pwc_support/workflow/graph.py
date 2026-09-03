@@ -242,8 +242,8 @@ def build_graph(
                     "idempotency_key": f"chat-{state['run_id']}",
                 })
                 return {
-                    "action_proposal": action,
-                    "events": [_event("gather_evidence", "retail_return_evaluated", started, status=(action.get("return") or {}).get("status"))],
+                    "action_proposal": {**action, "idempotency_key": f"chat-{state['run_id']}"},
+                    "events": [_event("gather_evidence", "retail_return_evaluated", started, eligible=bool((action.get("eligibility") or {}).get("eligible")))],
                 }
         if rag_answerer is None:
             return {
