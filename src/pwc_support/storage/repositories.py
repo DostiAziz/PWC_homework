@@ -378,6 +378,20 @@ class InboundRepository:
                 raise SupportError(ErrorCode.STALE_INBOUND_CLAIM, "inbound claim is stale")
         return claim.model_copy(update={"lease_expires_at": expiry})
 
+    def complete(self, claim: InboundClaim, outcome: object) -> None:
+        with self.database.connect() as c:
+            updated = c.execute(
+                "UPDATE inbound_messages SET status='completed', outcome_json=?, completed_at=?, lease_expires_at=NULL WHERE provider=? AND provider_message_id=? AND claim_token=?",
+                (json.dumps(outcome, default=str), datetime.now(UTC).isoformat(), claim.provider, claim.provider_message_id, claim.claim_token),
+            ).rowcount
+            if not updated:
+                raise SupportError(ErrorCode.STALE_INBOUND_CLAIM, "inbound claim is stale")
+
+    def completed_outcome(self, provider: str, provider_message_id: str) -> dict[str, object] | None:
+        with self.database.connect() as c:
+            row = c.execute("SELECT outcome_json FROM inbound_messages WHERE provider=? AND provider_message_id=? AND status='completed'", (provider, provider_message_id)).fetchone()
+        return json.loads(row["outcome_json"]) if row and row["outcome_json"] else None
+
 
 class OutboxRepository:
     def __init__(self, database: Database) -> None:
