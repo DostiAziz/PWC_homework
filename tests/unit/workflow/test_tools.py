@@ -14,7 +14,9 @@ def test_case_tool_opens_looks_up_and_closes_a_case() -> None:
     tool = CaseTool(InMemoryCaseStore())
 
     record, opened = tool.open_case(
-        conversation_id=uuid4(), client_id="client-1", category="general_enquiry",
+        conversation_id=uuid4(),
+        client_id="client-1",
+        category="general_enquiry",
         summary="Question about services",
     )
     found, lookup = tool.lookup(record.case_id)
@@ -40,8 +42,10 @@ def test_mailbox_tool_records_a_delivery_on_the_existing_thread() -> None:
     mailbox = InMemoryMailbox()
 
     call = MailboxTool(mailbox).deliver(
-        thread_id="thread-1", recipient="client@example.test",
-        subject="Re: Services", body="Here is the published information.",
+        thread_id="thread-1",
+        recipient="client@example.test",
+        subject="Re: Services",
+        body="Here is the published information.",
     )
 
     assert call.ok is True
@@ -54,9 +58,7 @@ def test_mailbox_tool_reports_a_delivery_failure_without_crashing_the_run() -> N
         def send(self, **_: object) -> object:
             raise OSError("disk full")
 
-    call = MailboxTool(BrokenMailbox()).deliver(
-        thread_id="t", recipient="r", subject="s", body="b"
-    )
+    call = MailboxTool(BrokenMailbox()).deliver(thread_id="t", recipient="r", subject="s", body="b")
 
     assert call.ok is False
     assert call.detail["error"] == "OSError"

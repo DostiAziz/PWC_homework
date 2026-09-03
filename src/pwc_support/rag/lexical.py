@@ -22,9 +22,7 @@ class LexicalIndex:
     def sync(self, chunks: tuple[CorpusChunk, ...], source_ids: set[str]) -> None:
         with self._connect() as connection:
             for source_id in source_ids:
-                connection.execute(
-                    "DELETE FROM chunks_fts WHERE source_id = ?", (source_id,)
-                )
+                connection.execute("DELETE FROM chunks_fts WHERE source_id = ?", (source_id,))
             connection.executemany(
                 "INSERT INTO chunks_fts(chunk_id, source_id, content) VALUES (?, ?, ?)",
                 [

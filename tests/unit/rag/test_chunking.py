@@ -10,9 +10,7 @@ from pwc_support.rag.ingest import (
 
 
 class FakeContextualizer:
-    def contextualize(
-        self, *, document: CorpusDocument, heading: str, chunk: str
-    ) -> str:
+    def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str:
         return f"Context for {document.source_id} and {heading}."
 
 
@@ -24,8 +22,11 @@ def test_manifest_loads_curated_documents_and_preserves_attribution() -> None:
 
     assert len(documents) == 5
     assert {item.source_id for item in documents} == {
-        "pwc-global-services", "pwc-financial-services", "pwc-industries",
-        "pwc-network-structure", "synthetic-support-faq",
+        "pwc-global-services",
+        "pwc-financial-services",
+        "pwc-industries",
+        "pwc-network-structure",
+        "synthetic-support-faq",
     }
     assert all(item.language == "en" for item in documents)
     assert any(item.source_id == "synthetic-support-faq" for item in documents)

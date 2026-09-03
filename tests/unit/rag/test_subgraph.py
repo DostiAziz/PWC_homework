@@ -7,7 +7,10 @@ def test_rag_subgraph_compiles_the_four_required_nodes() -> None:
     graph = build_rag_graph(FakeKnowledgeBase(), FakeGenerator()).get_graph()
 
     assert {
-        "prepare_query", "retrieve_candidates", "select_evidence", "answer_with_citations",
+        "prepare_query",
+        "retrieve_candidates",
+        "select_evidence",
+        "answer_with_citations",
     } <= set(graph.nodes)
 
 
@@ -19,7 +22,10 @@ def test_subgraph_answers_from_evidence_and_reports_per_node_timing() -> None:
     assert state["status"] == "answered"
     assert state["citations"][0].marker == "[S1]"
     assert set(state["node_timings"]) == {
-        "prepare_query", "retrieve_candidates", "select_evidence", "answer_with_citations",
+        "prepare_query",
+        "retrieve_candidates",
+        "select_evidence",
+        "answer_with_citations",
     }
 
 
@@ -50,8 +56,12 @@ def test_weak_similarity_is_discarded_before_generation() -> None:
 def test_selection_respects_the_maximum_hit_budget() -> None:
     hits = tuple(
         RetrievalHit(
-            source_id=f"s{index}", chunk_id=f"c{index}", title="t", text="evidence",
-            heading="h", similarity=0.9,
+            source_id=f"s{index}",
+            chunk_id=f"c{index}",
+            title="t",
+            text="evidence",
+            heading="h",
+            similarity=0.9,
         )
         for index in range(6)
     )

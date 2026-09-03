@@ -8,4 +8,3 @@ def test_streamlit_exposes_retail_workspace_controls() -> None:
     assert "recommendation-form" in source
     assert "order-status-form" in source
     assert "return-form" in source
-

@@ -4,11 +4,18 @@ from pwc_support.rag.answer import RagAnswerer, prepare_query
 
 class FakeKnowledgeBase:
     def retrieve(self, request: RagRequest, *, top_k: int = 6) -> RetrievalBatch:
-        return RetrievalBatch(hits=(RetrievalHit(
-            source_id="source-1", chunk_id="chunk-1", title="Services",
-            text="PwC provides consulting services.", heading="Services",
-            similarity=0.8,
-        ),))
+        return RetrievalBatch(
+            hits=(
+                RetrievalHit(
+                    source_id="source-1",
+                    chunk_id="chunk-1",
+                    title="Services",
+                    text="PwC provides consulting services.",
+                    heading="Services",
+                    similarity=0.8,
+                ),
+            )
+        )
 
 
 class FakeGenerator:

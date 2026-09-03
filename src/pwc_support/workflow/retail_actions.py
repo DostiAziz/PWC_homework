@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from pwc_support.domain.models import ReturnEligibility, ReturnRequest, RetailActionRisk
+from pwc_support.domain.models import RetailActionRisk, ReturnEligibility, ReturnRequest
 from pwc_support.storage.retail_repositories import RefundRepository, ReturnRepository
 
 
@@ -30,7 +30,9 @@ def request_return(
     now: datetime | None = None,
     auto_approval_limit: Decimal = Decimal("100.00"),
 ) -> tuple[ReturnRequest | None, ReturnEligibility]:
-    eligibility = evaluate_return(repository, order_id=order_id, item_id=item_id, reason=reason, now=now)
+    eligibility = evaluate_return(
+        repository, order_id=order_id, item_id=item_id, reason=reason, now=now
+    )
     if not eligibility.eligible:
         return None, eligibility
     risk_flags = eligibility.risk_flags
@@ -90,12 +92,17 @@ class RetailApprovalService:
         amount = Decimal(str(eligibility.get("refund_amount", "0")))
         proposal = self.refunds.propose(approved.return_id, amount)
         result = self.refunds.transition(str(proposal["refund_id"]), "approved", expected_version=1)
-        self._audit("refund_approved", str(result["refund_id"]), {"review_action": kind, "amount": str(result["amount"])})
+        self._audit(
+            "refund_approved",
+            str(result["refund_id"]),
+            {"review_action": kind, "amount": str(result["amount"])},
+        )
         return result
 
     def _audit(self, event_type: str, entity_id: str, details: dict[str, object]) -> None:
         with self.returns.database.connect() as c:
             c.execute(
-                "INSERT INTO retail_audit_events (event_type,entity_id,details_json,created_at) VALUES (?,?,?,?)",
+                "INSERT INTO retail_audit_events ("
+                "event_type,entity_id,details_json,created_at) VALUES (?,?,?,?)",
                 (event_type, entity_id, json.dumps(details), datetime.now(UTC).isoformat()),
             )
