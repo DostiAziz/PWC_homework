@@ -20,7 +20,6 @@ def test_retail_tools_expose_inventory_offer_and_return_schemas(tmp_path: Path) 
         "get_product",
         "check_inventory",
         "get_active_offer",
-        "lookup_order",
         "evaluate_product_return",
     } <= names
     assert tools[2].invoke({"product_id": "P-1"})["quantity"] == 3

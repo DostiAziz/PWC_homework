@@ -7,6 +7,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from pwc_support.agents.order import OrderToolbox
 from pwc_support.storage.retail_repositories import (
     OrderRepository,
     ProductRepository,
@@ -15,13 +16,28 @@ from pwc_support.storage.retail_repositories import (
 from pwc_support.workflow.retail_actions import evaluate_return
 
 
+class DefaultOrderToolbox(OrderToolbox):
+    def __init__(self, orders: OrderRepository):
+        self.orders = orders
+    
+    def lookup_order(self, order_id: str, customer_id: str) -> dict[str, Any] | None:
+        if not re.fullmatch(r"ORD-[A-Z0-9-]{1,64}", order_id, re.IGNORECASE):
+            return None
+        row = self.orders.lookup(order_id, customer_id)
+        return row.model_dump(mode="json") if row else None
+        
+    def inspect_order(self, order_id: str, customer_id: str) -> dict[str, Any] | None:
+        if not re.fullmatch(r"ORD-[A-Z0-9-]{1,64}", order_id, re.IGNORECASE):
+            return None
+        row = self.orders.investigate(order_id, customer_id)
+        return row.model_dump(mode="json") if row else None
+
 def build_retail_tools(
     products: ProductRepository,
     orders: OrderRepository,
     customer_id: str,
     returns: ReturnRepository | None = None,
 ) -> list[Any]:
-    account_id = customer_id
 
     @tool
     def search_products(
@@ -85,16 +101,6 @@ def build_retail_tools(
         return {"product_id": product_id, "offer": products.offer(product_id), "source": "offers"}
 
     @tool
-    def lookup_order(order_id: str, customer_id: str | None = None) -> dict[str, object]:
-        """Return the signed-in synthetic customer's order status and items."""
-        if not re.fullmatch(r"ORD-[A-Z0-9-]{1,64}", order_id, re.IGNORECASE):
-            return {"order": None, "error": "invalid order ID", "source": "orders"}
-        if customer_id is not None and customer_id != account_id:
-            return {"order": None, "error": "customer scope violation", "source": "orders"}
-        row = orders.lookup(order_id, account_id)
-        return {"order": row.model_dump(mode="json") if row else None, "source": "orders"}
-
-    @tool
     def evaluate_product_return(order_id: str, item_id: str, reason: str) -> dict[str, object]:
         """Evaluate return policy without creating a return or refund side effect."""
         if (
@@ -120,6 +126,5 @@ def build_retail_tools(
         get_product,
         check_inventory,
         get_active_offer,
-        lookup_order,
         evaluate_product_return,
     ]
