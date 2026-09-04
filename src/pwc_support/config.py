@@ -37,6 +37,8 @@ class Settings(BaseModel):
     refund_auto_approval_limit: Decimal = Field(default=Decimal("100.00"), ge=0)
     return_window_days: int = Field(default=30, ge=1, le=365)
     reviewer_ids: tuple[str, ...] = ("specialist-1",)
+    conversation_memory_max_chars: int = Field(default=12000, ge=500, le=100000)
+    specialist_max_steps: int = Field(default=8, ge=1, le=50)
 
     @property
     def operations_db(self) -> Path:
@@ -97,4 +99,8 @@ class Settings(BaseModel):
                 for item in os.getenv("PWC_REVIEWER_IDS", "specialist-1").split(",")
                 if item.strip()
             ),
+            conversation_memory_max_chars=int(
+                os.getenv("PWC_CONVERSATION_MEMORY_MAX_CHARS", "12000")
+            ),
+            specialist_max_steps=int(os.getenv("PWC_SPECIALIST_MAX_STEPS", "8")),
         )

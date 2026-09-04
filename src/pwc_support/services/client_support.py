@@ -10,6 +10,7 @@ from pwc_support.domain.models import (
     Channel,
     Citation,
     ClientOutcome,
+    ConversationMemory,
     DraftReply,
     OperationalEvent,
     OutcomeStatus,
@@ -18,6 +19,7 @@ from pwc_support.domain.models import (
     ReviewRequest,
     RoutingSnapshot,
 )
+from pwc_support.storage.conversation_state import ConversationStateRepository
 from pwc_support.storage.repositories import InboundRepository
 
 
@@ -53,12 +55,20 @@ class ClientSupportService:
         reviews: Any = None,
         database: Any = None,
         review_service: Any = None,
+        conversation_memory_max_chars: int = 12000,
     ) -> None:
         self.graph = graph
         self.reviews = reviews
         self.database = database
         self.review_service = review_service
         self.inbound = InboundRepository(database) if database is not None else None
+        self.conversation_state = (
+            ConversationStateRepository(
+                database, max_state_chars=conversation_memory_max_chars
+            )
+            if database is not None
+            else None
+        )
         self._identity_runs: dict[tuple[str, str], WorkflowRun] = {}
 
     def submit(
@@ -99,6 +109,11 @@ class ClientSupportService:
             if claim_result.status == "in_progress" or claim_result.claim is None:
                 raise RuntimeError("message is already being processed")
             claim = claim_result.claim
+        loaded_memory = (
+            self.conversation_state.load(conversation, client_id)
+            if self.conversation_state is not None
+            else None
+        )
         state = self.graph.invoke(
             {
                 "message": {
@@ -113,9 +128,16 @@ class ClientSupportService:
                 "conversation_id": str(conversation),
                 "thread_id": thread,
                 "client_id": client_id,
+                "conversation_memory": (
+                    loaded_memory.model_dump(mode="json") if loaded_memory is not None else None
+                ),
                 "channel": channel.value,
                 "inbound_message_id": identity,
             },
+        )
+        self._persist_conversation_memory(
+            state,
+            loaded_version=loaded_memory.version if loaded_memory is not None else None,
         )
         result = self._finish(
             state,
@@ -202,6 +224,24 @@ class ClientSupportService:
             rag_results=list(state.get("rag_results", [])),
             state=state,
         )
+
+    def _persist_conversation_memory(
+        self, state: dict[str, Any], *, loaded_version: int | None
+    ) -> None:
+        """Save the graph's memory update, if it returned one.
+
+        The current keyword-routed graph never sets `conversation_memory_update`, so
+        this is a no-op until the supervisor graph (a later task) starts returning it.
+        The compare-and-swap `expected_version` is the version observed at load time,
+        so a stale write is rejected instead of silently clobbering a concurrent turn.
+        """
+        if self.conversation_state is None:
+            return
+        update = state.get("conversation_memory_update")
+        if not update:
+            return
+        memory = ConversationMemory.model_validate(update)
+        self.conversation_state.save(memory, expected_version=loaded_version)
 
     def _persist_events(
         self, events: list[dict[str, Any]], *, conversation: UUID, run_id: UUID

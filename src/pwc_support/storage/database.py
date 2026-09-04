@@ -145,6 +145,16 @@ class Database:
                     details_json TEXT NOT NULL,
                     occurred_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS conversation_agent_state (
+                    conversation_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    state_json TEXT NOT NULL,
+                    active_specialist TEXT,
+                    active_task_id TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (conversation_id, client_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_review_status ON review_requests(status);
                 CREATE INDEX IF NOT EXISTS idx_event_run ON operational_events(run_id, event_id);
                 CREATE INDEX IF NOT EXISTS idx_inbound_lease
