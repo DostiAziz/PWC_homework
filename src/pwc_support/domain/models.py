@@ -51,8 +51,19 @@ class ReviewCategory(StrEnum):
 
 
 class TaskKind(StrEnum):
-    KNOWLEDGE_QUERY = "knowledge_query"
-    CASE_LOOKUP = "case_lookup"
+    KNOWLEDGE = "knowledge"
+    CATALOGUE = "catalogue"
+    ORDER = "order"
+
+
+class CatalogueAction(StrEnum):
+    SEARCH = "search"
+    OFFERS = "offers"
+
+
+class OrderAction(StrEnum):
+    LOOKUP = "lookup"
+    CANCEL = "cancel"
 
 
 class TaskStatus(StrEnum):
@@ -80,6 +91,44 @@ class ReviewDecisionKind(StrEnum):
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class Task(DomainModel):
+    task_id: str = Field(pattern=r"^task-[1-3]$")
+    kind: TaskKind
+    request: str = Field(min_length=1, max_length=1000)
+    product_query: str | None = Field(default=None, max_length=200)
+    order_id: str | None = Field(default=None, max_length=64)
+    catalogue_action: CatalogueAction | None = None
+    order_action: OrderAction | None = None
+
+    @field_validator("order_id")
+    @classmethod
+    def normalize_order_id(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else None
+
+    @model_validator(mode="after")
+    def actions_match_kind(self) -> Task:
+        if self.kind is TaskKind.KNOWLEDGE and (
+            self.product_query is not None
+            or self.order_id is not None
+            or self.catalogue_action is not None
+            or self.order_action is not None
+        ):
+            raise ValueError("knowledge task cannot contain commerce fields")
+        if self.kind is TaskKind.CATALOGUE and (
+            self.catalogue_action is None
+            or self.order_id is not None
+            or self.order_action is not None
+        ):
+            raise ValueError("catalogue task contains invalid fields")
+        if self.kind is TaskKind.ORDER and (
+            self.order_action is None
+            or self.product_query is not None
+            or self.catalogue_action is not None
+        ):
+            raise ValueError("order task contains invalid fields")
+        return self
 
 
 class CaseStatus(StrEnum):
@@ -110,14 +159,13 @@ class RetailActionRisk(StrEnum):
 
 
 class ProductSummary(DomainModel):
-    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    product_id: str
     name: str
     category: str
     price: Decimal = Field(ge=0)
-    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    currency: str
     stock: int = Field(ge=0)
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    active_offer: dict[str, Any] | None = None
+
 
 
 class OrderSummary(DomainModel):
@@ -213,6 +261,44 @@ class Citation(DomainModel):
     heading: str
     excerpt: str
     similarity: float = Field(ge=-1.0, le=1.0)
+
+
+class CancellationPreview(DomainModel):
+    confirmation_token: str = Field(min_length=8, max_length=64)
+    order_id: str
+    customer_id: str
+    expected_version: int = Field(ge=1)
+    summary: str
+
+
+class CancellationResult(DomainModel):
+    order_id: str
+    status: Literal["cancelled"]
+    replayed: bool
+
+
+class TaskResult(DomainModel):
+    task_id: str
+    kind: TaskKind
+    message: str
+    citations: tuple[Citation, ...] = ()
+    pending_cancellation: CancellationPreview | None = None
+    clear_pending: bool = False
+
+
+class TraceEvent(DomainModel):
+    node: str
+    event_type: str
+    duration_ms: float | None = None
+
+
+class ChatReply(DomainModel):
+    message: str
+    citations: tuple[Citation, ...] = ()
+    tasks: tuple[Task, ...] = ()
+    events: tuple[TraceEvent, ...] = ()
+    pending_cancellation: CancellationPreview | None = None
+    total_duration_ms: float = Field(ge=0)
 
 
 class RetrievalHit(DomainModel):
@@ -332,13 +418,6 @@ class ProposedAction(DomainModel):
 class WorkPlan(DomainModel):
     tasks: tuple[PlannedTask, ...] = Field(min_length=1, max_length=4)
     proposed_actions: tuple[ProposedAction, ...] = ()
-
-
-class TaskResult(DomainModel):
-    task_id: str
-    status: TaskStatus
-    payload: dict[str, Any] = Field(default_factory=dict)
-    error_code: str | None = None
 
 
 class DraftReply(DomainModel):
@@ -556,14 +635,15 @@ class CancellationExecutionResult(DomainModel):
 
 
 class OfferSummary(DomainModel):
-    """A database-computed active offer, priced in code rather than by a model."""
-
-    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
-    offer_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    offer_id: str
+    product_id: str
+    name: str
+    description: str
     list_price: Decimal = Field(ge=0)
     discount_percent: Decimal = Field(ge=0, le=100)
     effective_price: Decimal = Field(ge=0)
-    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    currency: str
+
 
 
 class ProductRecommendation(DomainModel):

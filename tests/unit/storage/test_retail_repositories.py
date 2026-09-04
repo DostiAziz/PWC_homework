@@ -326,3 +326,21 @@ def test_recommend_returns_only_database_facts(tmp_path: Path) -> None:
     # The match reason is built from stored facts, not invented ones.
     assert str(top.product.stock) in top.match_reason
     assert "10" in top.match_reason
+
+
+def test_active_offers_include_database_computed_effective_price(retail_db: Database) -> None:
+    offers = ProductRepository(retail_db).list_active_offers(query="jacket")
+
+    assert len(offers) == 1
+    assert offers[0].product_id == "PROD-1001"
+    assert offers[0].name == "Trail Shell"
+    assert offers[0].list_price == Decimal("129.99")
+    assert offers[0].effective_price == Decimal("116.99")
+
+
+def test_order_lookup_is_customer_scoped(retail_db: Database) -> None:
+    orders = OrderRepository(retail_db)
+
+    assert orders.lookup("ORD-2001", "CUS-1001") is not None
+    assert orders.lookup("ORD-2001", "CUS-1002") is None
+
