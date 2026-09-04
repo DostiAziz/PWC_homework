@@ -159,14 +159,13 @@ class RetailActionRisk(StrEnum):
 
 
 class ProductSummary(DomainModel):
-    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    product_id: str
     name: str
     category: str
     price: Decimal = Field(ge=0)
-    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    currency: str
     stock: int = Field(ge=0)
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    active_offer: dict[str, Any] | None = None
+
 
 
 class OrderSummary(DomainModel):
@@ -636,14 +635,15 @@ class CancellationExecutionResult(DomainModel):
 
 
 class OfferSummary(DomainModel):
-    """A database-computed active offer, priced in code rather than by a model."""
-
-    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
-    offer_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    offer_id: str
+    product_id: str
+    name: str
+    description: str
     list_price: Decimal = Field(ge=0)
     discount_percent: Decimal = Field(ge=0, le=100)
     effective_price: Decimal = Field(ge=0)
-    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    currency: str
+
 
 
 class ProductRecommendation(DomainModel):

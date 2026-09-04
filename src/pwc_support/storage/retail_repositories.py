@@ -23,34 +23,20 @@ class ProductRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def search(
-        self,
-        query: str,
-        category: str | None = None,
-        max_price: Decimal | None = None,
-        attributes: tuple[str, ...] = (),
-    ) -> tuple[ProductSummary, ...]:
-        clauses = [
-            "active=1",
-            "(lower(name) LIKE ? OR lower(category) LIKE ? OR lower(attributes_json) LIKE ?)",
-        ]
-        params: list[object] = [f"%{query.lower()}%", f"%{query.lower()}%", f"%{query.lower()}%"]
-        if category:
-            clauses.append("category=?")
-            params.append(category)
-        if max_price is not None:
-            clauses.append("price<=?")
-            params.append(str(max_price))
-        with self.database.connect() as c:
-            rows = c.execute(
-                f"SELECT * FROM products WHERE {' AND '.join(clauses)} ORDER BY price LIMIT 20",
-                params,
+    def search(self, query: str, limit: int = 20, **_: object) -> tuple[ProductSummary, ...]:
+        needle = f"%{query.casefold()}%"
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT p.product_id, p.name, p.category, p.price, p.currency, "
+                "COALESCE(SUM(i.quantity), 0) AS stock "
+                "FROM products p LEFT JOIN inventory i ON i.product_id = p.product_id "
+                "WHERE p.active = 1 AND "
+                "(lower(p.name) LIKE ? OR lower(p.category) LIKE ?) "
+                "GROUP BY p.product_id, p.name, p.category, p.price, p.currency "
+                "ORDER BY p.price LIMIT ?",
+                (needle, needle, limit),
             ).fetchall()
-            return tuple(
-                self._product(c, row)
-                for row in rows
-                if all(a.lower() in row["attributes_json"].lower() for a in attributes)
-            )
+        return tuple(ProductSummary.model_validate(dict(row)) for row in rows)
 
     def get(self, product_id: str) -> ProductSummary | None:
         with self.database.connect() as c:
@@ -78,16 +64,23 @@ class ProductRepository:
             ).fetchone()
         return dict(row) if row else None
 
-    def list_active_offers(self, limit: int = 20) -> tuple[OfferSummary, ...]:
-        """All active offers joined to their products, priced by the database, never the model."""
-        with self.database.connect() as c:
-            rows = c.execute(
-                "SELECT o.offer_id AS offer_id, o.product_id AS product_id, "
-                "o.discount_percent AS discount_percent, p.price AS price, p.currency AS currency "
-                "FROM offers o JOIN products p ON p.product_id = o.product_id "
-                "WHERE o.active = 1 AND p.active = 1 "
-                "ORDER BY o.offer_id LIMIT ?",
-                (limit,),
+    def list_active_offers(
+        self, query: str | None = None, limit: int = 20
+    ) -> tuple[OfferSummary, ...]:
+        clauses = ["o.active = 1", "p.active = 1"]
+        params: list[object] = []
+        if query:
+            clauses.append("(lower(p.name) LIKE ? OR lower(p.category) LIKE ?)")
+            needle = f"%{query.casefold()}%"
+            params.extend((needle, needle))
+        params.append(limit)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT o.offer_id, o.product_id, o.description, o.discount_percent, "
+                "p.name, p.price, p.currency FROM offers o "
+                "JOIN products p ON p.product_id = o.product_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY o.offer_id LIMIT ?",
+                params,
             ).fetchall()
         return tuple(self._offer_summary(row) for row in rows)
 
@@ -95,8 +88,8 @@ class ProductRepository:
         """The database-computed discounted price for a product's active offer, if any."""
         with self.database.connect() as c:
             row = c.execute(
-                "SELECT o.offer_id AS offer_id, o.product_id AS product_id, "
-                "o.discount_percent AS discount_percent, p.price AS price, p.currency AS currency "
+                "SELECT o.offer_id, o.product_id, o.description, "
+                "o.discount_percent, p.name, p.price, p.currency "
                 "FROM offers o JOIN products p ON p.product_id = o.product_id "
                 "WHERE o.product_id = ? AND o.active = 1 AND p.active = 1 "
                 "ORDER BY o.offer_id LIMIT 1",
@@ -112,8 +105,10 @@ class ProductRepository:
             list_price * (Decimal(1) - discount_percent / Decimal(100))
         ).quantize(Decimal("0.01"))
         return OfferSummary(
-            product_id=row["product_id"],
             offer_id=row["offer_id"],
+            product_id=row["product_id"],
+            name=row["name"],
+            description=row["description"],
             list_price=list_price,
             discount_percent=discount_percent,
             effective_price=effective_price,
@@ -131,9 +126,10 @@ class ProductRepository:
         """In-stock catalogue matches, ranked deterministically, reasoned from stored facts."""
         candidates = [
             product
-            for product in self.search(query, category=category, max_price=max_price)
+            for product in self.search(query, limit=limit)
             if product.stock > 0
         ]
+
         needle = query.strip().lower()
 
         def relevance(product: ProductSummary) -> int:
@@ -155,21 +151,19 @@ class ProductRepository:
             )
         return tuple(recommendations)
 
-    @staticmethod
-    def _match_reason(product: ProductSummary, needle: str) -> str:
+    def _match_reason(self, product: ProductSummary, needle: str) -> str:
         reasons: list[str] = []
         if needle and needle in product.name.lower():
             reasons.append(f"'{product.name}' matches '{needle}'")
-        elif needle and needle in product.category.lower():
-            reasons.append(f"category '{product.category}' matches '{needle}'")
         else:
             reasons.append(f"'{product.name}' is in category '{product.category}'")
-        if product.active_offer:
-            discount = product.active_offer.get("discount_percent")
-            if discount is not None:
-                reasons.append(f"{discount}% active offer")
+        offer = self.offer(product.product_id)
+        if offer and offer.get("discount_percent") is not None:
+            reasons.append(f"{offer['discount_percent']}% active offer")
         reasons.append(f"{product.stock} in stock")
+
         return "; ".join(reasons)
+
 
     def _product(self, c: object, row: sqlite3.Row) -> ProductSummary:
         quantity = 0
