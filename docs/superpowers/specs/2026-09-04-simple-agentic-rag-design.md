@@ -1,7 +1,7 @@
 # Simple Agentic RAG Customer Support Design
 
 Date: 2026-09-04
-Status: Ready for user review
+Status: Approved
 
 ## Purpose
 
@@ -153,7 +153,7 @@ class Task(BaseModel):
 
 Rules:
 
-- At most four tasks per message.
+- At most three tasks per message, one for each closed task kind.
 - Task kinds and actions are closed enums, and validation rejects actions that do not match the
   task kind.
 - The model cannot provide `customer_id`.
