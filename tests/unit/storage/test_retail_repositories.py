@@ -5,14 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from pwc_support.domain.models import CancellationPreview
 from pwc_support.storage.database import Database
 from pwc_support.storage.retail_repositories import (
+    CancellationConflict,
     OrderRepository,
     ProductRepository,
     RefundRepository,
     ReturnRepository,
 )
 from pwc_support.workflow.retail_actions import request_return
+
 
 
 def _db(tmp_path: Path) -> Database:
@@ -213,15 +216,29 @@ def test_investigate_is_non_disclosing_for_unknown_order_and_wrong_customer(
 def test_cancel_requires_expected_order_version(tmp_path: Path) -> None:
     database = _seed_database(tmp_path, status="processing")
     repository = OrderRepository(database)
-    with pytest.raises(ValueError, match="version conflict"):
-        repository.cancel("ORD-1", "CUS-1", expected_version=2, review_id="review-1")
+    preview = CancellationPreview(
+        confirmation_token="token-123",
+        order_id="ORD-1",
+        customer_id="CUS-1",
+        expected_version=2,
+        summary="Cancel ORD-1",
+    )
+    with pytest.raises(CancellationConflict, match="order changed before cancellation"):
+        repository.cancel(preview)
 
 
 def test_cancel_is_idempotent_for_same_review(tmp_path: Path) -> None:
     database = _seed_database(tmp_path, status="processing")
     repository = OrderRepository(database)
-    first = repository.cancel("ORD-1", "CUS-1", expected_version=1, review_id="review-1")
-    replay = repository.cancel("ORD-1", "CUS-1", expected_version=1, review_id="review-1")
+    preview = CancellationPreview(
+        confirmation_token="token-123",
+        order_id="ORD-1",
+        customer_id="CUS-1",
+        expected_version=1,
+        summary="Cancel ORD-1",
+    )
+    first = repository.cancel(preview)
+    replay = repository.cancel(preview)
     assert first.status == "cancelled"
     assert replay.status == "cancelled"
     assert replay.replayed is True
@@ -231,18 +248,27 @@ def test_cancel_is_idempotent_for_same_review(tmp_path: Path) -> None:
 def test_cancel_sets_status_cancelled_at_and_increments_version(tmp_path: Path) -> None:
     database = _seed_database(tmp_path, status="processing")
     repository = OrderRepository(database)
-    repository.cancel("ORD-1", "CUS-1", expected_version=1, review_id="review-1")
+    preview = CancellationPreview(
+        confirmation_token="token-123",
+        order_id="ORD-1",
+        customer_id="CUS-1",
+        expected_version=1,
+        summary="Cancel ORD-1",
+    )
+    repository.cancel(preview)
     investigation = repository.investigate("ORD-1", "CUS-1")
     assert investigation is not None
     assert investigation.status == "cancelled"
     assert investigation.version == 2
     with database.connect() as c:
         row = c.execute("SELECT cancelled_at FROM orders WHERE order_id='ORD-1'").fetchone()
-        audit = c.execute(
-            "SELECT COUNT(*) n FROM retail_audit_events WHERE event_type='order_cancelled'"
+        action = c.execute(
+            "SELECT COUNT(*) n FROM cancellation_actions WHERE confirmation_token='token-123'"
         ).fetchone()
+
     assert row["cancelled_at"] is not None
-    assert audit["n"] == 1
+    assert action["n"] == 1
+
 
 
 def test_list_for_customer_returns_only_that_customers_orders_most_recent_first(

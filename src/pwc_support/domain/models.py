@@ -172,10 +172,11 @@ class OrderSummary(DomainModel):
     order_id: str
     customer_id: str
     status: str
-    total: Decimal = Field(ge=0)
-    currency: str = "EUR"
-    items: tuple[dict[str, Any], ...] = ()
-    delivered_at: datetime | None = None
+    fulfilment_status: str
+    total: Decimal
+    currency: str
+    version: int = Field(ge=1)
+
 
 
 class ReturnEligibility(DomainModel):

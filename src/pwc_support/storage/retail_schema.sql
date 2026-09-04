@@ -42,14 +42,17 @@ CREATE TABLE IF NOT EXISTS retail_audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, entity_id TEXT NOT NULL,
     details_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS order_cancellation_actions (
-    review_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+CREATE TABLE IF NOT EXISTS cancellation_actions (
+    confirmation_token TEXT PRIMARY KEY,
     order_id TEXT NOT NULL REFERENCES orders(order_id),
     customer_id TEXT NOT NULL REFERENCES customers(customer_id),
-    status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT
+    status TEXT NOT NULL CHECK(status = 'cancelled'),
+    created_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_returns_status ON return_requests(status);
-CREATE INDEX IF NOT EXISTS idx_cancellation_actions_order
-    ON order_cancellation_actions(order_id);
+CREATE INDEX IF NOT EXISTS idx_cancellation_order
+    ON cancellation_actions(order_id, customer_id);
+
