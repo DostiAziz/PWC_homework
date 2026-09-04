@@ -57,43 +57,29 @@ are the workflow capabilities used here.
                                         ClientSupportService
                             (channel contract, event + review persistence)
                                                     │
-    START → intake → triage ─┬─ review ──→ gather_evidence ──────────→ human_review ─┐
-                             │             (retrieval only)                          │
-                             ├─ greeting / clarify ──────────→ respond_directly ──────┤
-                             │                                          ↑             │
-                             └─ plan → plan_work                        │             │
-                                          │ Send fan-out                │             │
-                                          ↓                             │             │
-                                    execute_task × N                    │             │
-                                          │ reducer join                │             │
-                                          ↓                             │             │
-                                     case_tools → compose_reply → verify_response     │
-                                                                         │            │
-                                              release ───────────────────┼────────────┤
-                                              review  ───────────────────┼──→ human_review
-                                              revise  ───────────────────┘            │
-                                                                                      ↓
-                                                                            finalise_case → END
+    START → supervisor_agent ─┬─→ product_specialist ────┐
+                              ├─→ order_specialist ──────┼─→ review ──→ human_review ─┐
+                              ├─→ return_refund_specialist ┼─→ verification           │
+                              ├─→ rag_specialist ────────┼─→ respond_directly ────────┤
+                              └─→ (clarify / greetings) ─┘                            │
+                                                                                      │
+                                              release ────────────────────────────────┤
+                                              review  ────────────────────────────────┼──→ human_review
+                                              revise  ────────────────────────────────┘            │
+                                                                                                   ↓
+                                                                                         finalise_case → END
 
-    execute_task (knowledge_query) invokes the RAG subgraph:
-        prepare_query → retrieve_candidates → select_evidence ─┬─ answer_with_citations → END
-                                                               └─ (no evidence) ──────→ END
-
-    gather_evidence invokes the same subgraph compiled without the generation node:
-        prepare_query → retrieve_candidates → select_evidence ────────────────────────→ END
 ```
 
 | Layer | Module | Responsibility |
 |---|---|---|
 | Domain | `domain/models.py`, `domain/state.py` | Pydantic contracts; typed `SupportState` with reducers |
-| Workflow | `workflow/graph.py` | The main `StateGraph`: triage, decomposition, tools, verification, review |
-| Workflow | `workflow/policy.py` | Deterministic risk and route classification (no model call) |
-| Workflow | `workflow/tools.py` | Non-retrieval tools: case management, simulated mailbox |
+| Workflow | `workflow/graph.py` | The main `StateGraph`: supervisor and specialist topology |
+| Workflow | `workflow/agents.py` | Supervisor, product, order, return/refund, and RAG agents |
+| Workflow | `workflow/retail_actions.py` | Idempotent retail API tools for specialist nodes |
 | Retrieval | `rag/subgraph.py` | The independently compiled four-node RAG `StateGraph` |
-| Retrieval | `rag/store.py`, `rag/lexical.py`, `rag/ingest.py` | Chroma (cosine), SQLite FTS5/BM25, chunking and manifest validation |
 | Storage | `storage/` | SQLite cases, review requests, inbound claims, outbox and operational events |
 | Service | `services/client_support.py` | Channel contract, run assembly, persistence, durable review queue |
-| Adapters | `adapters/simulated_mailbox.py`, `llm/ollama.py` | File-backed mailbox; local Ollama generation and embeddings |
 
 `SupportState` is a typed `TypedDict` whose concurrent slices carry reducers, because fan-out
 branches write simultaneously: `task_results` merges by task id and rejects conflicts, `events`
@@ -101,45 +87,24 @@ and `tool_calls` append, and `rag_results` de-duplicates by task id and keeps a 
 
 ## Workflow nodes and routing
 
-Eleven nodes, all reachable and all doing independent work:
+The workflow has been rewritten into a supervisor-specialist topology:
 
-| Node | What it does |
-|---|---|
-| `intake` | Normalises the message; assigns conversation, thread, client and run identifiers |
-| `triage` | Deterministic risk + route classification; detects an existing case reference |
-| `gather_evidence` | Researches an escalated enquiry for the specialist — retrieval only, no generation |
-| `plan_work` | Decomposes the enquiry into 1–4 typed `PlannedTask`s |
-| `execute_task` | Fan-out worker: runs the RAG subgraph or the case-lookup tool, once per task |
-| `case_tools` | Joins the fan-out; opens or reuses the durable case record |
-| `compose_reply` | Merges per-task answers into one reply with a single citation series |
-| `verify_response` | Grounding gate: evidence present, markers real, claims attributed |
-| `respond_directly` | Deterministic greeting, clarification, and abstention replies |
-| `human_review` | Persists a review packet and returns a pending acknowledgement |
-| `finalise_case` | Closes the case and delivers through the channel's tool |
+- **Supervisor Agent:** Handles natural-language compound intents, breaking them down and delegating to specialists.
+- **Product Specialist:** Recommends and queries products using retail API tools.
+- **Order Specialist:** Checks order status and handles cancellations via idempotent actions. Order-ID correction flow ensures valid formats are used.
+- **Return/Refund Specialist:** Enforces eligibility rules and requests return/refund processing.
+- **RAG Specialist:** Dedicated to general policy questions using the corpus.
 
-**Decomposition.** `plan_work` splits a multi-part enquiry into one knowledge task per substantive
-question and adds a `case_lookup` task when the message references an existing case. Each task is
-dispatched with `Send`, so the workers run independently in one superstep and their results are
-joined by the state reducers rather than by ordering assumptions. `compose_reply` then renumbers
-citation markers across tasks so two independently retrieved answers do not both claim `[S1]`.
+**Supervisor and specialist topology.** The supervisor decides whether a user message belongs to one or more domains. It delegates to the appropriate specialist agents which have domain-specific tools.
+**Compound-intent behavior.** A user asking "Cancel my order and what's the return policy?" is split into two tasks, routed to the order specialist and RAG specialist respectively.
+**Order-ID correction flow.** Order IDs must follow a specific format. The agent handles natural-language corrections if the user provides a malformed ID.
+**Durable memory scope.** Conversation history is persisted across turns, allowing the agent to remember context like order IDs from previous messages.
+**Reviewer approval boundary.** Certain actions like return approvals and sensitive requests pause execution and require a human specialist to review before continuing.
 
-**Routing is deterministic and cheap.** `ReviewPolicy.classify_route` runs before any model or
-retrieval call. Greetings and courtesies get a welcome; fragments get a clarification request; risk
-language goes straight to review; everything else is planned. A greeting costs 0 ms and zero
-tokens, and is never escalated to a human.
-
-**Escalation is reserved for real risk.** An enquiry that simply has no supporting evidence is
-answered with an explicit abstention, not sent to a specialist. Human review is for the five risk
-categories, for an evidence failure on an enquiry that already has a tracked case, and for a draft
-that cites a source that was never retrieved.
-
-**An escalation is researched, not just queued.** A risk-classified enquiry goes to
-`gather_evidence`, which runs the RAG subgraph in evidence-only mode: the same retrieval, the same
-similarity threshold, and then a stop. The specialist opens the review with the relevant published
-sources already in front of them rather than a blank box, while the rule that matters is preserved
-structurally — the generation node is not compiled into that graph at all, so no code path can ask
-the model to draft an answer to a legal or confidentiality question. Retrieval for an escalation
-costs ~20 ms and no tokens.
+**Conversational examples:**
+- "Can you tell me if my order has shipped?"
+- "I want to cancel order ORD-1002"
+- "What products are on offer?"
 
 ## The RAG subgraph
 
