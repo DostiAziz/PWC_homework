@@ -147,13 +147,15 @@ class Task(BaseModel):
     request: str
     product_query: str | None = None
     order_id: str | None = None
-    action: Literal["lookup", "cancel"] | None = None
+    catalogue_action: Literal["search", "offers"] | None = None
+    order_action: Literal["lookup", "cancel"] | None = None
 ```
 
 Rules:
 
 - At most four tasks per message.
-- Task kinds and actions are closed enums.
+- Task kinds and actions are closed enums, and validation rejects actions that do not match the
+  task kind.
 - The model cannot provide `customer_id`.
 - Greetings and confirmation replies use deterministic fast paths.
 - Invalid model output produces an explicit unavailable or clarification response.
