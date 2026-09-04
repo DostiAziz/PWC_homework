@@ -64,9 +64,7 @@ UNSAFE_OUTPUT = re.compile(
 )
 
 MARKER = re.compile(r"\[S\d+\]")
-LOOKALIKE_BRACKETS = str.maketrans(
-    {"\u3010": "[", "\u3011": "]", "\uff3b": "[", "\uff3d": "]"}
-)
+LOOKALIKE_BRACKETS = str.maketrans({"\u3010": "[", "\u3011": "]", "\uff3b": "[", "\uff3d": "]"})
 
 
 def prepare_query(question: str) -> str:

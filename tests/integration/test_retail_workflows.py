@@ -1,79 +1,75 @@
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-
-from pwc_support.storage.database import Database
-from pwc_support.storage.retail_repositories import (
-    OrderRepository,
-    ProductRepository,
-    ReturnRepository,
+from pwc_support.domain.models import (
+    CatalogueAction,
+    OrderAction,
+    RagResult,
+    Task,
+    TaskKind,
 )
+from pwc_support.storage.database import Database
+from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
+from pwc_support.workflow.commerce import CommerceTools
 from pwc_support.workflow.graph import build_graph
-from pwc_support.workflow.retail_tools import build_retail_tools
 
 
-def _db(tmp_path: Path) -> Database:
-    db = Database(tmp_path / "retail.sqlite3")
-    db.initialize()
-    delivered = (datetime.now(UTC) - timedelta(days=2)).isoformat()
-    with db.connect() as c:
-        c.execute(
-            "INSERT INTO products (product_id,name,category,price,currency,attributes_json,active) "
-            "VALUES (?,?,?,?,?,?,?)",
-            ("P-1", "Trail Jacket", "outerwear", "120", "EUR", "{}", 1),
-        )
-        c.execute(
-            "INSERT INTO inventory (product_id,location,quantity) VALUES (?,?,?)",
-            ("P-1", "WH-1", 3),
-        )
-        c.execute(
-            "INSERT INTO customers (customer_id,email) VALUES (?,?)", ("C-1", "c@example.test")
-        )
-        c.execute(
-            "INSERT INTO orders ("
-            "order_id,customer_id,status,total,currency,delivered_at,"
-            "payment_status,fulfilment_status,shipped_at,cancelled_at,version"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                "ORD-1",
-                "C-1",
-                "delivered",
-                "120",
-                "EUR",
-                delivered,
-                "paid",
-                "delivered",
-                delivered,
-                None,
-                1,
-            ),
-        )
-        c.execute(
-            "INSERT INTO order_items VALUES (?,?,?,?,?)", ("ITEM-1", "ORD-1", "P-1", 1, "120")
-        )
-    return db
+class StaticPlanner:
+    def __init__(self, tasks: tuple[Task, ...]) -> None:
+        self.tasks = tasks
+
+    def plan(self, _: str) -> tuple[Task, ...]:
+        return self.tasks
 
 
-def test_product_order_and_exception_paths_are_distinct(tmp_path: Path) -> None:
-    database = _db(tmp_path)
-    tools = build_retail_tools(
-        ProductRepository(database), OrderRepository(database), "C-1", ReturnRepository(database)
+class UnusedRag:
+    def answer(self, _: object) -> RagResult:
+        raise AssertionError("RAG must not run for commerce-only requests")
+
+
+def test_compound_catalogue_and_order_request_uses_real_sqlite(retail_db: Database) -> None:
+    tasks = (
+        Task(
+            task_id="task-1",
+            kind=TaskKind.CATALOGUE,
+            request="Show jacket offers",
+            product_query="jacket",
+            catalogue_action=CatalogueAction.OFFERS,
+        ),
+        Task(
+            task_id="task-2",
+            kind=TaskKind.ORDER,
+            request="Where is ORD-5001?",
+            order_id="ORD-5001",
+            order_action=OrderAction.LOOKUP,
+        ),
     )
-    graph = build_graph(retail_tools=tools)
-    product = graph.invoke({"message": {"body": "Show me a jacket", "sender_id": "C-1"}})
-    order = graph.invoke(
-        {"message": {"body": "What is the status of order ORD-1?", "sender_id": "C-1"}}
+    graph = build_graph(
+        planner=StaticPlanner(tasks),
+        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
+        rag_answerer=UnusedRag(),
     )
-    exception = graph.invoke(
-        {
-            "message": {
-                "body": "I want a refund for ORD-1 ITEM-1 because it is damaged",
-                "sender_id": "C-1",
-            }
-        }
+
+    result = graph.invoke(
+        {"message": "Show jacket offers and find ORD-5001", "customer_id": "CUS-1001"}
     )
-    assert product["outcome"]["status"] == "answered" and product["outcome"]["case_id"] is None
-    assert order["outcome"]["status"] == "answered" and "delivered" in order["delivery"]["message"]
-    assert (
-        exception["outcome"]["status"] == "pending_review"
-        and exception["review_request"]["proposed_actions"]
+
+    assert "Trail Shell" in result["response"]
+    assert "Order ORD-5001 is shipped." in result["response"]
+
+
+def test_order_path_does_not_disclose_another_customers_order(retail_db: Database) -> None:
+    task = Task(
+        task_id="task-1",
+        kind=TaskKind.ORDER,
+        request="Where is ORD-3001?",
+        order_id="ORD-3001",
+        order_action=OrderAction.LOOKUP,
     )
+    graph = build_graph(
+        planner=StaticPlanner((task,)),
+        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
+        rag_answerer=UnusedRag(),
+    )
+
+    result = graph.invoke({"message": task.request, "customer_id": "CUS-1001"})
+
+    assert result["response"] == "I could not find that order for this customer."
+    assert "CUS-1002" not in result["response"]

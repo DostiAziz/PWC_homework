@@ -69,7 +69,9 @@ def test_cancellation_does_not_mutate_before_confirmation(retail_db: Database) -
 
     assert result.pending_cancellation is not None
     assert result.pending_cancellation.confirmation_token == "confirm-ord-2001"
-    assert OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001").status == "processing"
+    order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
+    assert order is not None
+    assert order.status == "processing"
 
 
 def test_confirmed_cancellation_mutates_exactly_once(retail_db: Database) -> None:
@@ -104,7 +106,9 @@ def test_confirmed_cancellation_mutates_exactly_once(retail_db: Database) -> Non
 
     assert first.message == "Order ORD-2001 has been cancelled."
     assert second.replayed
-    assert orders.lookup("ORD-2001", "CUS-1001").status == "cancelled"
+    cancelled_order = orders.lookup("ORD-2001", "CUS-1001")
+    assert cancelled_order is not None
+    assert cancelled_order.status == "cancelled"
 
 
 def test_shipped_order_cannot_enter_confirmation(retail_db: Database) -> None:
@@ -126,4 +130,3 @@ def test_shipped_order_cannot_enter_confirmation(retail_db: Database) -> None:
 
     assert result.pending_cancellation is None
     assert result.message == "Order ORD-5001 cannot be cancelled because it has already shipped."
-

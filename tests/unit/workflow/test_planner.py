@@ -15,7 +15,7 @@ class FakeStructuredModel:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload
 
-    def structured(self, *, schema: type, **_: Any) -> Any:
+    def structured(self, *, schema: Any, **_: Any) -> Any:
         return schema.model_validate(self.payload)
 
 

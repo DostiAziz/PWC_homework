@@ -1,18 +1,22 @@
-from pwc_support.domain.models import Citation, RagRequest, RetrievalBatch, RetrievalHit
+from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
 from pwc_support.rag.answer import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:
     def __init__(self, hits: tuple[RetrievalHit, ...] | None = None) -> None:
-        self.hits = hits if hits is not None else (
-            RetrievalHit(
-                source_id="shipping-and-orders",
-                chunk_id="shipping-and-orders-delivery-times-0",
-                title="Shipping and order support",
-                heading="Delivery times",
-                text="Standard delivery normally takes three to five business days.",
-                similarity=0.9,
-            ),
+        self.hits = (
+            hits
+            if hits is not None
+            else (
+                RetrievalHit(
+                    source_id="shipping-and-orders",
+                    chunk_id="shipping-and-orders-delivery-times-0",
+                    title="Shipping and order support",
+                    heading="Delivery times",
+                    text="Standard delivery normally takes three to five business days.",
+                    similarity=0.9,
+                ),
+            )
         )
 
     def retrieve(self, request: RagRequest, *, top_k: int = 6) -> RetrievalBatch:
@@ -20,7 +24,9 @@ class FakeKnowledgeBase:
 
 
 class FakeGenerator:
-    def __init__(self, reply: str = "Standard delivery takes three to five business days. [S1]") -> None:
+    def __init__(
+        self, reply: str = "Standard delivery takes three to five business days. [S1]"
+    ) -> None:
         self.calls: list[str] = []
         self.reply = reply
 

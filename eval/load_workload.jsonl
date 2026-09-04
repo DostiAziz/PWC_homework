@@ -1,10 +1,10 @@
-{"id":"load-1","question":"What services does PwC provide to financial services clients?"}
-{"id":"load-2","question":"Which industries does PwC publish information about?"}
-{"id":"load-3","question":"What does PwC describe about audit and assurance work?"}
-{"id":"load-4","question":"Why might my territory matter for a PwC enquiry?"}
-{"id":"load-5","question":"Does a public service description establish an engagement?"}
-{"id":"load-6","question":"What tax related support does PwC describe?"}
-{"id":"load-7","question":"What can this support assistant answer for me?"}
-{"id":"load-8","question":"What does PwC publish about asset and wealth management?"}
-{"id":"load-9","question":"hi"}
-{"id":"load-10","question":"I want to make a complaint and speak to a manager."}
+{"id":"load-greeting","question":"Hello","customer_id":"CUS-1001"}
+{"id":"load-product-search","question":"What jackets are available?","customer_id":"CUS-1001"}
+{"id":"load-active-offers","question":"What jacket offers do you have?","customer_id":"CUS-1001"}
+{"id":"load-order-status","question":"Where is ORD-5001?","customer_id":"CUS-1001"}
+{"id":"load-order-unknown","question":"Where is ORD-9999?","customer_id":"CUS-1001"}
+{"id":"load-shipping","question":"How long does standard shipping take?","customer_id":"CUS-1001"}
+{"id":"load-cancellation-policy","question":"When can an order be cancelled?","customer_id":"CUS-1001"}
+{"id":"load-warranty","question":"How long is the product warranty?","customer_id":"CUS-1001"}
+{"id":"load-compound","question":"What jacket offers do you have and how long does standard shipping take?","customer_id":"CUS-1001"}
+{"id":"load-out-of-scope","question":"How does quantum entanglement work?","customer_id":"CUS-1001"}

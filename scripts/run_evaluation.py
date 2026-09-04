@@ -1,10 +1,11 @@
-"""Score the frozen evaluation set against the real Ollama, Chroma and SQLite runtime."""
+"""Score the frozen evaluation set against the real Ollama, Chroma, and SQLite runtime."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,9 +13,15 @@ from typing import Any
 
 from pwc_support.bootstrap import build_runtime
 from pwc_support.config import Settings
-from pwc_support.services.client_support import ClientSupportService, WorkflowRun
+from pwc_support.domain.models import ChatReply
+from pwc_support.storage.database import Database
 
-CRITERIA = ("status", "sources", "abstention", "categories", "tasks", "attribution")
+try:
+    from scripts.seed_retail_data import seed
+except ModuleNotFoundError:
+    from seed_retail_data import seed  # type: ignore[import-not-found,no-redef]
+
+CRITERIA = ("routing", "sources", "terms", "safety", "attribution", "conversation")
 MARKER = re.compile(r"\[S\d+\]")
 
 
@@ -26,28 +33,28 @@ class CaseScore:
     detail: dict[str, Any]
 
 
-def score_case(case: dict[str, Any], run: WorkflowRun) -> CaseScore:
-    """Score route, cited sources, abstention, review categories, decomposition, attribution."""
-    status = run.outcome.status.value
-    expected_status = str(case["expected_status"])
-    cited = sorted({citation.source_id for citation in run.outcome.citations})
-    required = sorted(case.get("required_sources", []))
-    categories = sorted(run.state.get("triage", {}).get("review_categories", []))
-    task_kinds = sorted(str(task["kind"]) for task in run.state.get("plan", {}).get("tasks", []))
+def score_case(case: dict[str, Any], reply: ChatReply) -> CaseScore:
+    text = reply.message.casefold()
     expected_kinds = sorted(case.get("expected_task_kinds", []))
-    answered = status == "answered" and bool(run.outcome.citations)
+    actual_kinds = sorted(task.kind.value for task in reply.tasks)
+    required_sources = set(case.get("required_sources", []))
+    actual_sources = {citation.source_id for citation in reply.citations}
+    message_markers = set(MARKER.findall(reply.message))
+    citation_markers = {citation.marker for citation in reply.citations}
+    expect_citations = bool(case.get("expect_citations", False))
     checks = {
-        "status": status == expected_status,
-        "sources": set(required) <= set(cited),
-        # An unsupported question must abstain rather than invent an answer.
-        "abstention": expected_status != "unable_to_answer" or not run.outcome.citations,
-        "categories": set(case.get("expected_categories", [])) <= set(categories),
-        "tasks": task_kinds == expected_kinds,
-        # A released answer must carry at least one marker that maps to a real citation.
-        "attribution": not answered
-        or bool(
-            set(MARKER.findall(run.outcome.message))
-            & {citation.marker for citation in run.outcome.citations}
+        "routing": actual_kinds == expected_kinds,
+        "sources": required_sources <= actual_sources,
+        "terms": all(term.casefold() in text for term in case.get("required_terms", [])),
+        "safety": all(term.casefold() not in text for term in case.get("forbidden_terms", [])),
+        "attribution": (
+            bool(reply.citations) == expect_citations
+            and message_markers <= citation_markers
+            and (not expect_citations or bool(message_markers))
+        ),
+        "conversation": (
+            (reply.pending_cancellation is not None)
+            == bool(case.get("expect_pending_cancellation", False))
         ),
     }
     return CaseScore(
@@ -55,61 +62,76 @@ def score_case(case: dict[str, Any], run: WorkflowRun) -> CaseScore:
         passed=all(checks.values()),
         checks=checks,
         detail={
-            "question": case["question"],
-            "expected_status": expected_status,
-            "actual_status": status,
-            "cited_sources": cited,
-            "required_sources": required,
-            "review_categories": categories,
-            "task_kinds": task_kinds,
-            "latency_ms": run.total_duration_ms,
-            "visited_nodes": run.visited_nodes,
-            "answer": run.outcome.message[:400],
+            "answer": reply.message,
+            "task_kinds": actual_kinds,
+            "cited_sources": sorted(actual_sources),
+            "latency_ms": reply.total_duration_ms,
         },
     )
 
 
 def run(path: Path) -> dict[str, Any]:
-    runtime = build_runtime()
-    service = ClientSupportService(
-        runtime.graph,
-        reviews=runtime.reviews,
-        database=runtime.database,
-        mailbox=runtime.mailbox,
-    )
-    cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    scores: list[CaseScore] = []
-    started = time.perf_counter()
-    for index, case in enumerate(cases, start=1):
-        result = service.submit(
-            body=str(case["question"]),
-            client_id=f"evaluation-client-{index}",
-        )
-        score = score_case(case, result)
-        scores.append(score)
-        print(
-            f"[{index:>2}/{len(cases)}] {score.case_id:<24} "
-            f"{'PASS' if score.passed else 'FAIL'} "
-            f"({score.detail['actual_status']}, {score.detail['latency_ms']:.0f} ms)"
-        )
-    elapsed = time.perf_counter() - started
-    per_criterion = {
-        criterion: round(sum(score.checks[criterion] for score in scores) / len(scores), 4)
-        for criterion in CRITERIA
-    }
-    return {
-        "generation_model": runtime.settings.generation_model,
-        "embedding_model": runtime.settings.embedding_model,
-        "cases": len(scores),
-        "passed": sum(score.passed for score in scores),
-        "accuracy": round(sum(score.passed for score in scores) / len(scores), 4),
-        "per_criterion_accuracy": per_criterion,
-        "elapsed_seconds": round(elapsed, 2),
-        "results": [
-            {"id": score.case_id, "passed": score.passed, "checks": score.checks, **score.detail}
-            for score in scores
-        ],
-    }
+    settings = Settings.from_env()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "eval_retail.sqlite3"
+        database = Database(db_path)
+        database.initialize()
+        seed(database)
+
+        eval_settings = settings.model_copy(update={"retail_db_path": db_path})
+        runtime = build_runtime(eval_settings)
+        service = runtime.service
+
+        cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+        scores: list[CaseScore] = []
+        started = time.perf_counter()
+        for index, case in enumerate(cases, start=1):
+            customer_id = str(case.get("customer_id", "CUS-1001"))
+            pending_cancellation = None
+            reply: ChatReply | None = None
+            turns = case.get("turns", [case.get("question", "")])
+            for turn in turns:
+                reply = service.submit(
+                    body=str(turn),
+                    customer_id=customer_id,
+                    pending_cancellation=pending_cancellation,
+                )
+                pending_cancellation = reply.pending_cancellation
+            assert reply is not None
+            score = score_case(case, reply)
+            scores.append(score)
+            print(
+                f"[{index:>2}/{len(cases)}] {score.case_id:<24} "
+                f"{'PASS' if score.passed else 'FAIL'} "
+                f"({score.detail['latency_ms']:.0f} ms)"
+            )
+        elapsed = time.perf_counter() - started
+        per_criterion = {
+            criterion: round(sum(score.checks[criterion] for score in scores) / len(scores), 4)
+            if scores
+            else 0.0
+            for criterion in CRITERIA
+        }
+        return {
+            "generation_model": runtime.settings.generation_model,
+            "embedding_model": runtime.settings.embedding_model,
+            "cases": len(scores),
+            "passed": sum(score.passed for score in scores),
+            "accuracy": round(sum(score.passed for score in scores) / len(scores), 4)
+            if scores
+            else 0.0,
+            "per_criterion_accuracy": per_criterion,
+            "elapsed_seconds": round(elapsed, 2),
+            "results": [
+                {
+                    "id": score.case_id,
+                    "passed": score.passed,
+                    "checks": score.checks,
+                    **score.detail,
+                }
+                for score in scores
+            ],
+        }
 
 
 def main() -> None:
@@ -128,7 +150,7 @@ def main() -> None:
         f"in {result['elapsed_seconds']:.1f}s -> {args.output}"
     )
     for criterion, value in result["per_criterion_accuracy"].items():
-        print(f"  {criterion:<12} {value:.1%}")
+        print(f"  {criterion:<14} {value:.1%}")
 
 
 if __name__ == "__main__":
