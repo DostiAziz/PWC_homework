@@ -29,7 +29,6 @@ from pwc_support.storage.retail_repositories import (
 from pwc_support.workflow.graph import build_graph
 from pwc_support.workflow.retail_actions import RetailApprovalService
 from pwc_support.workflow.retail_tools import build_retail_tools
-from pwc_support.workflow.risk_classifier import OllamaSemanticRiskClassifier
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
@@ -82,13 +81,7 @@ def build_runtime(
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
     mailbox = SimulatedMailbox(resolved.mailbox_path, database=database)
-    risk_classifier = (
-        OllamaSemanticRiskClassifier.from_settings(resolved)
-        if resolved.semantic_classifier_model.strip()
-        else None
-    )
     graph = build_graph(
-        risk_classifier=risk_classifier,
         retail_tools=build_retail_tools(
             ProductRepository(retail_database),
             OrderRepository(retail_database),

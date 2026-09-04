@@ -33,12 +33,6 @@ class Settings(BaseModel):
     minimum_similarity: float = Field(default=0.45, ge=0.0, le=1.0)
     max_selected_hits: int = Field(default=4, ge=1, le=10)
     max_evidence_chars: int = Field(default=6000, ge=500, le=40000)
-    semantic_classifier_model: str = ""
-    semantic_classifier_timeout_seconds: float = Field(default=20.0, gt=0)
-    semantic_classifier_prompt_version: str = "v1"
-    semantic_classifier_taxonomy_version: str = "v1"
-    semantic_classifier_schema_version: str = "v1"
-    semantic_classifier_retry_count: int = Field(default=1, ge=0, le=2)
     retail_db_path: Path | None = None
     refund_auto_approval_limit: Decimal = Field(default=Decimal("100.00"), ge=0)
     return_window_days: int = Field(default=30, ge=1, le=365)

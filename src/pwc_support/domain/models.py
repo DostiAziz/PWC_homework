@@ -144,42 +144,12 @@ class ReturnRequest(DomainModel):
     idempotency_key: str
 
 
-class SemanticRiskRoute(StrEnum):
-    ROUTINE = "routine"
-    REVIEW = "review"
-    UNCERTAIN = "uncertain"
-
-
-class SemanticRiskDecision(DomainModel):
-    route: SemanticRiskRoute
-    categories: frozenset[ReviewCategory] = frozenset()
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    justification: Annotated[str, StringConstraints(max_length=400)] = ""
-
-    @model_validator(mode="after")
-    def validate_categories(self) -> SemanticRiskDecision:
-        if self.route is SemanticRiskRoute.ROUTINE and self.categories:
-            raise ValueError("routine semantic results cannot contain categories")
-        review_routes = (SemanticRiskRoute.REVIEW, SemanticRiskRoute.UNCERTAIN)
-        if self.route in review_routes and not self.categories:
-            raise ValueError("review and uncertain semantic results require categories")
-        return self
-
-
 class RoutingSnapshot(DomainModel):
     input_fingerprint: str
     provider_message_id: str
     policy_version: str
     deterministic_match: bool
     matched_rule_ids: tuple[str, ...] = ()
-    classifier_invoked: bool = False
-    classifier_attempts: int = Field(default=0, ge=0, le=2)
-    classifier: SemanticRiskDecision | None = None
-    classifier_model: str | None = None
-    classifier_prompt_version: str | None = None
-    classifier_taxonomy_version: str | None = None
-    classifier_schema_version: str | None = None
-    failure_class: str | None = None
     pre_retrieval_route: str
     snapshot_hash: str
 

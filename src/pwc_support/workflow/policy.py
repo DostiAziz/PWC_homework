@@ -7,8 +7,6 @@ from typing import Literal
 from pwc_support.domain.models import (
     ReviewCategory,
     Route,
-    SemanticRiskDecision,
-    SemanticRiskRoute,
 )
 
 GREETING = re.compile(
@@ -183,18 +181,3 @@ class ReviewPolicy:
             matched_rule_ids=(f"post_retrieval_{evidence_state}",),
             policy_version=self.policy_version,
         )
-
-
-def merge_routing(
-    *,
-    deterministic: PolicyDecision,
-    semantic: SemanticRiskDecision | None,
-) -> tuple[bool, frozenset[ReviewCategory]]:
-    """Combine routing signals while preserving every deterministic escalation."""
-    categories = set(deterministic.categories)
-    if semantic is not None and semantic.route in {
-        SemanticRiskRoute.REVIEW,
-        SemanticRiskRoute.UNCERTAIN,
-    }:
-        categories.update(semantic.categories)
-    return bool(categories), frozenset(categories)

@@ -14,7 +14,7 @@ COPY scripts ./scripts
 COPY corpus ./corpus
 COPY config ./config
 COPY eval ./eval
-COPY app.py streamlit_app.py README.md ./
+COPY app.py README.md ./
 
 EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
