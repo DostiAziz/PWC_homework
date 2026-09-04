@@ -12,23 +12,28 @@ one or more typed tasks, and routes each task to a reusable specialist subgraph.
 
 The specialist set is:
 
-- `OrderAgent`: order status, order ownership, fulfilment, payment state, cancellation assessment,
-  and cancellation review preparation;
-- `ProductAgent`: product, price, stock, recommendation, and offer lookups from bounded database
-  tools;
-- `ReturnRefundAgent`: return eligibility, refund implications, and review preparation for
-  side-effecting actions;
+- `OrderAgent`: order status, order ownership, fulfilment, payment state, customer order listing,
+  cancellation assessment, and cancellation review preparation;
+- `ProductAgent`: product, price, stock, recommendation, per-product offer, catalogue-wide active-offer
+  listing, and effective (discounted) price lookups from bounded read-only database tools;
+- `ReturnRefundAgent`: memory-aware collection of return details, return eligibility, refund
+  implications, and review preparation for side-effecting actions;
 - `RagAgent`: unstructured policy, service, FAQ, and general knowledge questions using the
-  existing contextual hybrid RAG subgraph.
+  existing contextual hybrid RAG subgraph, grounded in the ingested retail knowledge corpus.
 
 The main workflow remains responsible for conversation memory coordination, customer-facing
 responses, task fan-out and join, durable case creation, and human-review delivery. A specialist
-does not write directly to the UI or mutate an order. It returns a validated result to the main
-workflow.
+does not write directly to the UI or mutate an order, return, or refund. It returns a validated
+result to the main workflow.
 
-Cancellation is always assessed by `OrderAgent` and then handed to human review after the agent
-has collected and verified the required order information. Automatic cancellation is out of scope
-for this prototype.
+Cancellation, return, and refund are all assessed by their specialist and then handed to human review
+after the agent has collected and verified the required information. Every state change is executed
+only after reviewer approval through an idempotent, version-checked application command. Automatic
+cancellation, return creation, and refund are out of scope for this prototype.
+
+Local model generation is serialized to the configured concurrency, so independent tasks are planned
+in parallel but the specialists that call the model never exceed the single-model limit. The simulated
+email channel is processed through the same supervisor, classifier, and specialists as chat.
 
 ## Problem and rationale
 
@@ -62,10 +67,17 @@ for questions that are not answered by transactional tools.
    message.
 6. Search the database again after a corrected order number is supplied.
 7. Return control to the main workflow after a terminal specialist result.
-8. Produce a human-review packet containing verified order facts and policy findings before any
-   cancellation action.
+8. Produce a human-review packet containing verified facts and policy findings before any
+   cancellation, return, or refund action.
 9. Keep policy enforcement deterministic and prevent model-selected database mutations.
 10. Show one coherent client conversation while retaining a separate internal review workspace.
+11. Answer product, price, offer, and recommendation questions from bounded read-only database tools,
+    including catalogue-wide active offers and the computed discounted price.
+12. Collect return and refund details conversationally with the same memory-aware clarification and
+    resume behavior used for orders.
+13. Ground RAG policy answers in a dedicated ingested retail knowledge corpus and retain citations.
+14. Serialize local model generation across the fan-out and route the simulated-email channel through
+    the same supervisor and specialists as chat.
 
 ## Non-goals
 
@@ -147,20 +159,22 @@ PlannedTask
   specialist
 ```
 
-The closed intent set is:
+The closed set of task intents that route to a specialist is:
 
-- `product_search`;
-- `product_recommendation`;
-- `order_status`;
-- `order_cancellation`;
-- `return_or_refund`;
-- `knowledge_question`;
-- `clarification_required`;
-- `unsupported`.
+- `product_search` and `product_recommendation` → `ProductAgent`;
+- `order_status` and `order_cancellation` → `OrderAgent`;
+- `return_request` and `refund_request` → `ReturnRefundAgent`;
+- `knowledge_question` → `RagAgent`.
 
 `order_status` and `order_cancellation` both route to `OrderAgent`. They are separate intents for
 the planner and final response, but they share the same specialist because cancellation requires
-the order lookup and inspection steps first.
+the order lookup and inspection steps first. Return and refund likewise share `ReturnRefundAgent`.
+
+`clarification_required` and `unsupported` are decision-level outcomes represented on
+`RoutingDecision`, not task intents that route to a specialist. A `clarification_required` decision
+carries a reason and produces a direct clarification reply with an empty task list. An `unsupported`
+decision (no in-scope task) returns a safe "I can help with products, orders, returns, and policy
+questions" response and creates no case.
 
 ### Hybrid routing policy
 
@@ -361,23 +375,44 @@ An order belonging to a different customer is returned as not found to avoid dis
 ## ProductAgent
 
 `ProductAgent` handles product search, recommendation, price, stock, and offer questions using
-read-only typed database tools. It returns exact product facts and does not invent missing prices,
-offers, or inventory.
+read-only typed database tools: `search`, `get_product`, `check_inventory`, `get_active_offer`,
+`list_active_offers`, `effective_price`, and `recommend`. It returns exact product facts and does not
+invent missing prices, offers, or inventory. For a price/offer question it reports the list price,
+discount, and the effective discounted price with currency, all computed in code rather than by the
+model. For a catalogue-wide "what is on offer" question it enumerates the active offers.
 
-Recommendations may use the local model to interpret preferences, but product facts remain sourced
-from the database. If the user asks an additional policy question in the same message, that becomes
-a separate `knowledge_question` task for `RagAgent`.
+Recommendations may use the local model to interpret preferences and phrase the answer, but product
+facts remain sourced from the database, ranking is over in-stock catalogue matches, and each
+recommendation carries a database-derived match reason. An empty catalogue match is stated as such. If
+the user asks an additional policy question in the same message, that becomes a separate
+`knowledge_question` task for `RagAgent`.
 
 ## ReturnRefundAgent
 
-`ReturnRefundAgent` handles return and refund requests. It gathers order and item facts, evaluates
-eligibility, records risk flags and policy findings, and produces a side-effect-free proposal.
-Financial, irreversible, late, disputed, duplicate, or otherwise exceptional operations return to
-the main workflow as human-review work. The agent has no automatic refund execution capability.
+`ReturnRefundAgent` handles return and refund requests with the same memory-aware clarification loop
+as `OrderAgent`, because a customer rarely supplies the order ID, item, and reason in one message. Its
+nodes are `merge_memory`, `understand_return_request`, `collect_return_details`,
+`lookup_order_and_item`, `evaluate_eligibility`, `prepare_return_review`, and
+`return_to_main_workflow`, bounded by the specialist step limit. Missing order, item, or reason returns
+`needs_information` and persists partial state so the next message resumes the same specialist.
+Customer scope is enforced inside `lookup_order_and_item`: an order or item that does not belong to the
+requesting customer is treated as not found and never disclosed, following the same two-lookup
+correction policy as orders.
+
+It gathers order and item facts, evaluates eligibility, records risk flags and policy findings, and
+produces a side-effect-free `ReturnReviewPacket` or `RefundReviewPacket`. Financial, irreversible,
+late, disputed, duplicate, or otherwise exceptional operations return to the main workflow as
+human-review work. The agent has no automatic return or refund execution capability; approved returns
+and refunds are executed by the main workflow through the existing return/refund repositories.
 
 ## RagAgent and the existing RAG subsystem
 
-The existing contextual hybrid RAG graph remains a reusable specialist. It continues to perform:
+The existing contextual hybrid RAG graph remains a reusable specialist. Its data source is a dedicated
+retail knowledge corpus — clearly-labelled synthetic policy documents for cancellation, returns,
+refunds, shipping, offers, and general service — ingested into the RAG index. These documents are kept
+consistent with the deterministic policy predicates the operational specialists enforce, so RAG
+explanations and enforced decisions do not contradict each other. Policy questions are answered only
+from this corpus, never from model memory. It continues to perform:
 
 1. query preparation;
 2. dense and lexical retrieval;
@@ -427,10 +462,12 @@ The reviewer sees:
 - missing, conflicting, or unavailable information;
 - any permitted RAG evidence and citations.
 
-Reviewer decisions are approve, reject, request information, or take ownership. Approval is the
-only path that may authorize a cancellation command. The command is idempotent and uses optimistic
-version checks. Delivery through the simulated mailbox occurs only after the business mutation and
-review decision are durably committed.
+Reviewer decisions are approve, reject, request information, or take ownership, and cover cancellation,
+return, and refund actions. Approval is the only path that may authorize a cancellation, return, or
+refund command. Each command is idempotent, keyed by review ID, and uses optimistic version checks; a
+changed entity version surfaces a reviewable conflict rather than mutating a different state. Delivery
+through the simulated mailbox occurs only after the business mutation and review decision are durably
+committed.
 
 ## Error and safety behavior
 
@@ -482,32 +519,45 @@ internal workspace and is not presented as a client route selector.
 The implementation is complete only when the following behaviors are covered by focused tests and
 live UI checks:
 
-1. A product price or offer question routes to `ProductAgent` and returns database facts.
-2. A general policy question routes to `RagAgent` and returns citations.
-3. A compound product or policy plus order-cancellation message creates multiple tasks and joins
-   their results.
-4. A cancellation request without an order number asks for it in the same conversation.
-5. A first order lookup miss asks the customer to check the order number.
-6. A second lookup miss returns the final no-information response through the main workflow and
+1. A product price or offer question routes to `ProductAgent` and returns database facts, including
+   the effective discounted price computed in code.
+2. A "what is on offer" question returns the catalogue-wide list of active offers from the database.
+3. A product recommendation returns only in-stock catalogue matches with database-derived reasons, or
+   a clear no-match message, and never invents a product, price, or offer.
+4. A general policy question routes to `RagAgent` and returns an answer grounded in the retail corpus
+   with citations.
+5. A compound product or policy plus order-cancellation message creates multiple tasks and joins
+   their results, releasing the safe answer while reporting the action as pending review.
+6. A cancellation request without an order number asks for it in the same conversation.
+7. A first order lookup miss asks the customer to check the order number.
+8. A second lookup miss returns the final no-information response through the main workflow and
    creates no review case.
-7. A corrected order number resumes the active `OrderAgent` without losing the cancellation intent.
-8. A found order produces verified status, payment, fulfilment, amount, and policy findings.
-9. A completed cancellation investigation creates exactly one human-review packet and no order
-   mutation.
-10. Reviewer approval is required before cancellation execution, and duplicate approval is idempotent.
-11. An order belonging to another customer is not disclosed.
-12. Tool failures, classifier failures, insufficient RAG evidence, and conflicting evidence produce
+9. A corrected order number resumes the active `OrderAgent` without losing the cancellation intent.
+10. A found order produces verified status, payment, fulfilment, amount, and policy findings.
+11. A return or refund request collects the order, item, and reason conversationally, resumes the
+    active `ReturnRefundAgent` across turns, and enforces customer scope.
+12. A completed cancellation, return, or refund investigation creates exactly one human-review packet
+    and no entity mutation.
+13. Reviewer approval is required before any cancellation, return, or refund execution, and duplicate
+    approval is idempotent.
+14. An order or item belonging to another customer is not disclosed.
+15. Tool failures, classifier failures, insufficient RAG evidence, and conflicting evidence produce
     explicit safe outcomes.
-13. The client UI contains one chat input and no static retail task forms.
-14. The UI displays specialist routing, tool activity, citations, and review status without exposing
+16. Fanned-out specialists that call the model never exceed the configured generation concurrency.
+17. A message arriving on the simulated-email channel is handled by the same supervisor and specialists
+    as chat.
+18. The client UI contains one chat input and no static retail task forms.
+19. The UI displays specialist routing, tool activity, citations, and review status without exposing
     private model reasoning.
 
 ## Migration boundary
 
 The existing RAG ingestion, retrieval, citation, mailbox, asynchronous review, and bounded database
-repositories remain in scope for reuse. The implementation will replace the current retail keyword
-branches and static retail workspace with the classifier, specialist contracts, OrderAgent state,
-and supervisor routing described here.
+repositories remain in scope for reuse. A dedicated retail knowledge corpus is added as the RAG data
+source, and the product/order repositories are extended with the offer-listing, effective-price,
+recommendation, and order-investigation reads the specialists need. The implementation will replace the
+current retail keyword branches and static retail workspace with the classifier, specialist contracts,
+OrderAgent and ReturnRefundAgent state, and supervisor routing described here.
 
 The implementation plan must keep the work phase-bounded. It should first establish the contracts
 and routing path, then implement OrderAgent memory and tool loops, then integrate ProductAgent,

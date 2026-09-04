@@ -23,6 +23,14 @@
 - Conversation memory is scoped by `(conversation_id, client_id)` and must not retain card numbers, secrets, or unrestricted payment references.
 - Customer-visible responses must not expose internal policy rule text, fraud scores, raw SQL, or private model reasoning.
 - Every task and specialist node records a correlation ID, task ID, node timing, safe tool summary, and terminal status.
+- Product, offer, and price facts — including the effective discounted price and any catalogue-wide list of active offers — come from bounded read-only database tools; the agent never computes, rounds, or invents a discount, price, or stock level.
+- Product recommendations rank and justify only over database-sourced product facts; no product identity, attribute, price, or availability may be fabricated, and an empty catalogue match is stated as such.
+- Return and refund requests use the same memory-aware clarification loop as orders: the agent collects the order, item, and reason conversationally, resumes the same specialist on the next message, and enforces customer scope inside the tool.
+- Every customer-facing state change — order cancellation, return creation, and refund — is proposed by a specialist, sent to human review, and executed only after reviewer approval through an idempotent, version-checked application command. No specialist executes a mutation directly.
+- RAG answers about retail policy (cancellation, returns, refunds, shipping, offers, and general service questions) must be grounded in the ingested retail knowledge corpus and cite it; the system does not answer policy questions from model memory.
+- Local generation is serialized to `settings.max_parallel_generations`; every fanned-out specialist that calls the model acquires a shared generation slot, so independent tasks are planned concurrently but never exceed the configured model concurrency.
+- The simulated-email channel is processed through the same supervisor, classifier, and specialists as chat; it is not a separate keyword path.
+- All new settings and schema must be reproducible in the container: additive migrations run at startup, and every new environment variable appears in `.env.example` and `docker-compose.yml`.
 - Use TDD for every behavior change. Before claiming completion, run focused tests, full `pytest`, Ruff, and strict mypy.
 
 ---
@@ -39,6 +47,7 @@ Create the following focused modules:
 - `src/pwc_support/agents/returns.py`: reusable ReturnRefundAgent graph for return/refund assessment.
 - `src/pwc_support/agents/rag.py`: adapter from routed knowledge tasks to the existing RAG subgraph.
 - `src/pwc_support/storage/conversation_state.py`: durable conversation-specialist memory repository.
+- `data/retail_corpus/`: source retail policy documents (cancellation, returns, refunds, shipping, offers, general service) used as the RAG data source.
 
 Modify the following existing modules:
 
@@ -47,10 +56,13 @@ Modify the following existing modules:
 - `src/pwc_support/domain/state.py`: add supervisor task-plan, active-agent-memory, specialist-result, and joined-result slices with reducers.
 - `src/pwc_support/storage/database.py`: initialize conversation-memory and order-investigation/cancellation schema additions safely for existing SQLite files.
 - `src/pwc_support/storage/retail_schema.sql`: add payment, fulfilment, shipping, version, and cancellation-action fields/tables.
-- `src/pwc_support/storage/retail_repositories.py`: expose typed investigation and optimistic cancellation operations.
-- `src/pwc_support/workflow/retail_tools.py`: expose bounded typed order-investigation tools and keep automatic cancellation mutation unavailable.
-- `src/pwc_support/workflow/retail_actions.py`: apply reviewer-approved cancellation actions idempotently.
-- `src/pwc_support/services/review.py`: support cancellation approval/rejection and preserve action-before-delivery ordering.
+- `src/pwc_support/storage/retail_repositories.py`: expose typed investigation and optimistic cancellation operations, plus catalogue-wide active-offer listing, effective-price computation, and recommendation ranking over product facts.
+- `src/pwc_support/workflow/retail_tools.py`: expose bounded typed order-investigation, offers-browse, effective-price, and recommendation tools; keep every mutation (cancellation, return creation, refund) unavailable to the automatic agent path.
+- `src/pwc_support/workflow/retail_actions.py`: apply reviewer-approved cancellation, return, and refund actions idempotently.
+- `src/pwc_support/services/review.py`: support cancellation, return, and refund approval/rejection and preserve action-before-delivery ordering.
+- `scripts/ingest_corpus.py`: ingest the retail knowledge corpus (cancellation, return, refund, shipping, and offer policy documents) into the RAG index.
+- `scripts/run_load.py` and `scripts/run_evaluation.py`: exercise the supervisor/specialist path and record the new latency profile and bottleneck.
+- `.env.example` and `docker-compose.yml`: add the new classifier, specialist-loop, and conversation-memory environment variables.
 - `src/pwc_support/services/client_support.py`: load and save conversation-specialist memory around each graph invocation.
 - `src/pwc_support/workflow/graph.py`: replace keyword retail branches with classifier, active-agent resume, specialist fan-out, join, and main-workflow handoff.
 - `src/pwc_support/bootstrap.py`: construct classifier, specialist subgraphs, conversation memory repository, and dependencies explicitly.
@@ -71,6 +83,8 @@ Update or create focused tests:
 - `tests/unit/workflow/test_supervisor_graph.py`
 - `tests/unit/workflow/test_retail_tools.py`
 - `tests/unit/services/test_cancellation_review.py`
+- `tests/unit/services/test_return_refund_review.py`
+- `tests/unit/rag/test_retail_corpus.py`
 - `tests/integration/test_agentic_customer_journey.py`
 - `tests/ui/test_retail_contracts.py`
 
@@ -88,8 +102,11 @@ Update or create focused tests:
 
 **Interfaces:**
 - Produces `SupportIntent`, `SpecialistName`, `SpecialistStatus`, `RoutingTask`, `RoutingDecision`, `PolicyFinding`, `OrderInvestigation`, `CancellationReviewPacket`, `CancellationExecutionResult`, `SpecialistResult`, and `ConversationMemory`.
+- Produces `OfferSummary`, `ProductRecommendation`, `ReturnInvestigation`, `ReturnReviewPacket`, and `RefundReviewPacket` so product-offer facts and return/refund review handoffs are typed the same way as order investigation.
 - Produces `SupportState` slices named `routing_decision`, `routing_tasks`, `active_specialist`, `conversation_memory`, `specialist_results`, and `joined_response_parts`.
-- Extends `ProposedAction.action_type` with `retail_cancellation` and `ReviewDecisionKind` with `APPROVE_CANCELLATION` and `REJECT_CANCELLATION`.
+- Extends `ProposedAction.action_type` with `retail_cancellation` (return/refund action types already exist) and `ReviewDecisionKind` with `APPROVE_CANCELLATION`, `REJECT_CANCELLATION`, `APPROVE_RETURN`, `REJECT_RETURN`, `APPROVE_REFUND`, and `REJECT_REFUND`.
+- `SpecialistStatus` includes specialist-agnostic clarification/terminal values (`NEEDS_INFORMATION`, `CORRECTION_REQUESTED`, `REVIEW_REQUIRED`, `COMPLETED`, `UNSUPPORTED`, `TOOL_UNAVAILABLE`, `FAILED`) plus the order-specific `ORDER_NOT_FOUND`, so OrderAgent and ReturnRefundAgent share one clarification vocabulary while OrderAgent keeps its existing not-found status.
+- `ConversationMemory.active_specialist` accepts any `SpecialistName` (Order or ReturnRefund), not just the order specialist, so returns can also pause for clarification and resume.
 
 - [ ] **Step 1: Write failing contract tests.**
 
@@ -170,12 +187,12 @@ git commit -m "feat: add specialist routing contracts"
 
 ---
 
-### Task 2: Extend the retail database for order investigation and cancellation
+### Task 2: Extend the retail database for order investigation, cancellation, and the product/offer catalogue
 
 **Files:**
 - Modify: `src/pwc_support/storage/retail_schema.sql:16-39`
 - Modify: `src/pwc_support/storage/database.py:160-200`
-- Modify: `src/pwc_support/storage/retail_repositories.py:102-128`
+- Modify: `src/pwc_support/storage/retail_repositories.py:18-128`
 - Modify: `src/pwc_support/domain/models.py:120-127`
 - Modify: `scripts/seed_retail_data.py`
 - Test: `tests/unit/storage/test_retail_repositories.py`
@@ -185,6 +202,10 @@ git commit -m "feat: add specialist routing contracts"
 - Produces `OrderRepository.investigate(order_id: str, customer_id: str) -> OrderInvestigation | None`.
 - Produces `OrderRepository.cancel(order_id: str, customer_id: str, *, expected_version: int, review_id: str) -> CancellationExecutionResult`.
 - Produces exact order facts for status, total, currency, payment state, fulfilment state, shipment timestamp, version, and items.
+- Produces `OrderRepository.list_for_customer(customer_id: str) -> tuple[OrderSummary, ...]` so the agent can show a customer their own recent orders when they do not remember an order ID.
+- Produces `ProductRepository.list_active_offers(limit: int) -> tuple[OfferSummary, ...]` for catalogue-wide "what is on offer" questions.
+- Produces `ProductRepository.effective_price(product_id: str) -> OfferSummary | None` (or an added field on `ProductSummary`) that returns the list price, discount percent, and computed discounted price with currency, computed in SQL/Python, never by the model.
+- Produces `ProductRepository.recommend(query: str, *, category: str | None, max_price: Decimal | None, limit: int) -> tuple[ProductRecommendation, ...]` that ranks in-stock catalogue matches by relevance/price and returns only database-sourced facts plus a `match_reason` derived from those facts.
 
 - [ ] **Step 1: Write failing schema and repository tests.**
 
@@ -234,13 +255,25 @@ Make `investigate()` query by both order ID and customer ID. Return `None` for b
 and an order belonging to another customer. Make `cancel()` insert-or-reuse the action record,
 update the order only when the supplied version matches, set `status='cancelled'`, set
 `cancelled_at`, increment `version`, and write a retail audit event. Return a typed result with
-`replayed=True` for the same review replay.
+`replayed=True` for the same review replay. Add `list_for_customer()` returning that customer's own
+orders only, ordered most-recent-first and bounded by a limit.
+
+Implement the product catalogue reads: `list_active_offers()` joins `offers` to `products` for all
+`active=1` offers; `effective_price()` computes `price * (1 - discount_percent/100)` with the
+product's currency and rounds using `Decimal`, never floating point or the model; `recommend()`
+reuses the existing `search()` filters, keeps only in-stock rows, orders by a deterministic
+relevance-then-price key, and builds each `match_reason` from stored attributes/category/offer facts.
+None of these product methods mutate state, and none invent a price, discount, stock level, or
+product identity.
 
 - [ ] **Step 5: Update seed data and fixtures.**
 
 Seed at least one processing and unpaid order, one paid and unshipped order, one shipped order, and
 one delivered order. Keep `ORD-1001` as the standard client fixture. Add payment and fulfilment
-values to all existing test fixture rows.
+values to all existing test fixture rows. Seed several products across at least two categories with
+varied attributes and stock, and at least two active offers on distinct products so
+`list_active_offers` and `recommend` return meaningful results. Add a `test_list_active_offers` and a
+`test_recommend_returns_only_database_facts` case to the repository tests.
 
 - [ ] **Step 6: Run focused tests and commit.**
 
@@ -403,12 +436,20 @@ Expected: FAIL because the classifier contracts and adapter do not exist.
 
 - [ ] **Step 3: Define the closed classification schema.**
 
-Use the following intents: `PRODUCT_SEARCH`, `PRODUCT_RECOMMENDATION`, `ORDER_STATUS`,
+Use the following task intents: `PRODUCT_SEARCH`, `PRODUCT_RECOMMENDATION`, `ORDER_STATUS`,
 `ORDER_CANCELLATION`, `RETURN_REQUEST`, `REFUND_REQUEST`, and `KNOWLEDGE_QUERY`. Map product
 search/recommendation to ProductAgent, order status/cancellation to OrderAgent, return/refund to
 ReturnRefundAgent, and policy/general questions to RagAgent. Each task contains normalized entities,
 the original user text, a bounded task ID, and dependency IDs. Reject unknown values, duplicate task
 IDs, self-dependencies, cycles, missing dependency IDs, and plans above `settings.max_planned_tasks`.
+
+The spec's `clarification_required` and `unsupported` outcomes are represented on `RoutingDecision`,
+not as task intents that route to a specialist: `clarification_required=True` with a
+`clarification_reason` produces a direct clarification reply with an empty task list, and a decision
+with no in-scope task is marked `unsupported` so the main workflow returns a safe "I can help with
+products, orders, returns, and policy questions" response and creates no case. Confirm the plan's
+task intents and these two decision-level outcomes match the closed set in the design spec so the two
+documents cannot drift.
 
 - [ ] **Step 4: Implement the Ollama adapter with a safe failure boundary.**
 
@@ -573,25 +614,49 @@ any attempted mutation so the tests verify side-effect boundaries.
 
 - [ ] **Step 2: Implement ProductAgent as a bounded read-only tool loop.**
 
-Reuse the existing product repository tools for exact product, price, stock, offer, and
-recommendation facts. Let a structured ProductPlanner select only search, get product, inventory,
-active offer, or finish. Build the customer answer from returned facts and include uncertainty when
-the catalogue has no match. ProductAgent must never invent a price, discount, stock level, or product
-identity.
+Expose a `ProductToolbox` over the repository reads from Task 2: `search`, `get_product`,
+`check_inventory`, `get_active_offer`, `list_active_offers`, `effective_price`, and `recommend`. Let a
+structured ProductPlanner select only one of those reads or `finish`. Build the customer answer from
+returned facts: for a price/offer question include the list price, discount, and computed discounted
+price with currency; for "what is on offer" enumerate `list_active_offers`; for a recommendation use
+`recommend` and present each item with its database-sourced `match_reason`. Include explicit
+uncertainty when the catalogue has no match. ProductAgent may use the model only to phrase the answer
+and interpret preferences — never to invent a price, discount, stock level, product identity, or offer.
+Add `test_product_agent_lists_active_offers` and `test_product_recommendation_uses_only_db_facts` to
+the product-agent tests.
 
-- [ ] **Step 3: Implement ReturnRefundAgent as an assessment subgraph.**
+- [ ] **Step 3: Implement ReturnRefundAgent as a memory-aware assessment subgraph.**
+
+Give ReturnRefundAgent the same clarification/memory pattern as OrderAgent, because a customer
+rarely supplies the order ID, item, and reason in one message. Implement nodes `merge_memory`,
+`understand_return_request`, `collect_return_details`, `lookup_order_and_item`, `evaluate_eligibility`,
+`prepare_return_review`, and `return_to_main_workflow`, bounded by `specialist_max_steps`.
+`collect_return_details` returns `NEEDS_INFORMATION` for a missing order ID, item, or reason and
+persists the partial state so the next customer message resumes the same specialist (Task 3 memory,
+Task 7 resume). Enforce customer scope inside `lookup_order_and_item`: an order or item that does not
+belong to the requesting customer is treated as `NOT_FOUND` and never disclosed, following the same
+two-lookup correction policy as orders.
 
 Wrap the existing return/refund eligibility logic with a typed `ReturnToolbox`. It may evaluate an
-item and prepare a `ProposedAction`, but it must not create a request, issue money, or write a case.
-Return and refund requests become review-ready results for the main workflow, preserving existing
-return-window and refund-approval settings.
+item and prepare a `ReturnReviewPacket`/`RefundReviewPacket` with verified order and item facts,
+eligibility findings, refund implication, and risk flags, but it must not create a request, issue
+money, or write a case. Every return and refund becomes a `REVIEW_REQUIRED` result for the main
+workflow, preserving existing return-window and refund-approval settings. Add
+`test_return_agent_collects_missing_details_over_two_turns` and
+`test_return_agent_enforces_customer_scope` to the return-agent tests.
 
-- [ ] **Step 4: Implement RagAgent as the existing RAG boundary.**
+- [ ] **Step 4: Implement RagAgent as the existing RAG boundary, grounded on retail policy.**
 
 Map a `RoutingTask` to the existing `RagRequest` and invoke `build_rag_graph()` through a small
 adapter. Preserve contextual hybrid retrieval, evidence selection, answer citations, and the
 existing no-answer behavior. RAG may answer policy/general questions, but it must not provide
-order-specific facts that belong to OrderAgent or ProductAgent.
+order-specific facts that belong to OrderAgent or ProductAgent. RagAgent answers only from the
+retail knowledge corpus ingested in Task 10; the fake RAG collaborator in these unit tests returns
+typed evidence, and the real grounding is exercised by the corpus test and the integration journey.
+Expose an evidence-only mode (`answer=False`) that returns selected evidence and citations without
+drafting a customer reply, so OrderAgent and ReturnRefundAgent can attach permitted policy citations
+to a review packet without the RAG model writing the response for a mandatory-review case. Add
+`test_rag_agent_evidence_only_mode_returns_no_draft` to the RAG-agent tests.
 
 - [ ] **Step 5: Run focused tests and commit.**
 
@@ -673,26 +738,38 @@ state fields compatible with current tests and persisted events.
 - [ ] **Step 4: Implement classifier dispatch and LangGraph fan-out.**
 
 Replace keyword-specific retail branches and the direct `plan_work` retail calls with
-`classify_and_plan`. If active memory contains an unfinished OrderAgent task, route the new message
-to that task for clarification handling before creating a new plan. Otherwise validate the classifier
-decision and use LangGraph `Send` to fan out independent tasks to the registered specialist graph.
-Respect `depends_on` edges by dispatching only ready tasks and scheduling dependent tasks after their
-predecessor result is joined. Do not call a specialist's tools from the supervisor.
+`classify_and_plan`. If active memory contains an unfinished specialist task (OrderAgent *or*
+ReturnRefundAgent), route the new message to that specialist for clarification handling before
+creating a new plan. Otherwise validate the classifier decision and use LangGraph `Send` to fan out
+independent tasks to the registered specialist graph. Respect `depends_on` edges by dispatching only
+ready tasks and scheduling dependent tasks after their predecessor result is joined. Do not call a
+specialist's tools from the supervisor.
+
+Serialize model usage across the fan-out: give the shared `OllamaGenerator` a single generation slot
+sized by `settings.max_parallel_generations` (default 1) so fanned-out specialists that each call the
+model run their generations one at a time even though their tasks are planned in parallel. Add a test
+that two independent model-using specialists never exceed the configured concurrency, and note in the
+plan that this serialization is the reason the load-test bottleneck shifts (see Task 11).
 
 - [ ] **Step 5: Join results and hand back to the main workflow.**
 
 `join_specialist_results` stores all typed results and memory updates. `compose_reply` combines
 customer-safe messages in task order, includes RAG citations, and reports when an order ID needs
-correction or was not found. `prepare_escalation` creates a main-workflow review request only for a
-valid review packet or other existing review-ready action. For `ORDER_NOT_FOUND`, hand control back
-with a customer response and no case. `finalise` persists outcome, traces, and any safe memory
-update.
+correction or was not found. For a compound message that mixes a safe answer with a pending action,
+release the RAG/product answer immediately and describe the cancellation/return/refund as awaiting
+human review — never as completed. `prepare_escalation` creates a main-workflow review request for any
+valid review packet (cancellation, return, or refund) or other existing review-ready action. For
+`ORDER_NOT_FOUND` or an `unsupported` decision, hand control back with a customer response and no
+case. `finalise` persists outcome, traces, and any safe memory update.
 
 - [ ] **Step 6: Wire explicit dependencies in bootstrap and service code.**
 
 Construct the classifier, specialists, memory repository, and graph in `bootstrap.py`; pass them
 through `ClientSupportService` rather than using module globals. Preserve the existing RAG index,
-SQLite connection, idempotency, and review dispatch wiring. Add operational events for classifier
+SQLite connection, idempotency, and review dispatch wiring. Ensure the simulated-email inbound path
+(`InboundRepository` claim/complete in `client_support.py`) runs the same supervisor/service entry
+point as chat, so classifier, specialists, memory, and review handoff behave identically on both
+channels; do not leave a separate keyword branch for email. Add operational events for classifier
 failure, specialist terminal status, tool failures, review creation, and main-workflow handoff.
 
 - [ ] **Step 7: Run focused tests and commit.**
@@ -708,7 +785,7 @@ git commit -m "feat: route support tasks through specialist graphs"
 
 ---
 
-### Task 8: Require human approval for cancellation execution
+### Task 8: Require human approval for cancellation, return, and refund execution
 
 **Files:**
 - Modify: `src/pwc_support/workflow/retail_actions.py:1-180`
@@ -716,12 +793,16 @@ git commit -m "feat: route support tasks through specialist graphs"
 - Modify: `src/pwc_support/domain/models.py:92-106`
 - Modify: `app.py:250-420`
 - Test: `tests/unit/services/test_cancellation_review.py`
+- Test: `tests/unit/services/test_return_refund_review.py`
 
 **Interfaces:**
-- Produces reviewer decisions `approve_cancellation` and `reject_cancellation`.
+- Produces reviewer decisions `approve_cancellation`/`reject_cancellation`,
+  `approve_return`/`reject_return`, and `approve_refund`/`reject_refund`.
 - Extends `RetailApprovalService.apply` to support `retail_cancellation` through
-  `OrderRepository.cancel(...)`.
-- Produces idempotent cancellation execution keyed by `review_id` and expected order version.
+  `OrderRepository.cancel(...)` and to route return/refund approvals through the existing return/refund
+  repositories.
+- Produces idempotent execution for every action kind, keyed by `review_id` and the expected entity
+  version.
 
 - [ ] **Step 1: Write failing review and mutation-boundary tests.**
 
@@ -760,30 +841,34 @@ Expected: FAIL because cancellation is not an approved action type and the servi
 
 - [ ] **Step 3: Implement idempotent reviewer-approved execution.**
 
-Validate that the review packet contains a verified order, customer scope, policy findings, and the
-version observed during investigation. Add `retail_cancellation` handling to
-`RetailApprovalService.apply`; call `OrderRepository.cancel` only for an approval decision. A
-rejection records the decision and audit event without touching the order. Replays with the same
-review ID must return the existing execution result, while a changed order version must surface a
-reviewable conflict rather than canceling a different state.
+Validate that the review packet contains a verified order/item, customer scope, policy findings, and
+the version observed during investigation. Add `retail_cancellation` handling to
+`RetailApprovalService.apply`; call `OrderRepository.cancel` only for an approval decision. Reconcile
+the new `ReturnRefundAgent` packets with the existing return/refund approval path so an approved
+return creates the return request and an approved refund issues through the existing refund
+repository — reusing, not duplicating, that logic. A rejection records the decision and audit event
+without touching the entity. Replays with the same review ID must return the existing execution
+result for every action kind, while a changed entity version must surface a reviewable conflict rather
+than mutating a different state.
 
 - [ ] **Step 4: Preserve action-before-delivery ordering.**
 
-For retail cancellation, execute the idempotent retail action before marking the review complete and
-before dispatching the customer outbox message. If the process stops after retail mutation but before
-review persistence, replaying the same pending review must reuse the cancellation action and then
-finish review/outbox persistence. Do not send a success message for a rejected or failed action.
+For every retail mutation (cancellation, return, refund), execute the idempotent retail action before
+marking the review complete and before dispatching the customer outbox message. If the process stops
+after retail mutation but before review persistence, replaying the same pending review must reuse the
+existing action and then finish review/outbox persistence. Do not send a success message for a
+rejected or failed action.
 
 - [ ] **Step 5: Update reviewer UI and run checks.**
 
-Display the verified order summary, payment/refund implication, fulfilment/shipping state, policy
-findings, missing/conflicting facts, recommended action, and provenance. Add cancellation approve/
-reject controls while keeping raw database values and private reasoning out of the customer-facing
-surface. Run focused tests and Ruff, then commit:
+Display the verified order/item summary, payment/refund implication, fulfilment/shipping state, policy
+findings, missing/conflicting facts, recommended action, and provenance. Add approve/reject controls
+for cancellation, return, and refund reviews while keeping raw database values and private reasoning
+out of the customer-facing surface. Run focused tests and Ruff, then commit:
 
 ```bash
-git add src/pwc_support/workflow/retail_actions.py src/pwc_support/services/review.py src/pwc_support/domain/models.py app.py tests/unit/services/test_cancellation_review.py
-git commit -m "feat: require review approval for cancellation"
+git add src/pwc_support/workflow/retail_actions.py src/pwc_support/services/review.py src/pwc_support/domain/models.py app.py tests/unit/services/test_cancellation_review.py tests/unit/services/test_return_refund_review.py
+git commit -m "feat: require review approval for retail mutations"
 ```
 
 ---
@@ -847,12 +932,61 @@ git commit -m "feat: make client support conversational"
 
 ---
 
-### Task 10: Verify the complete agentic journey and record evidence
+### Task 10: Author and ingest the retail knowledge corpus
+
+**Files:**
+- Create: `data/retail_corpus/` (cancellation, returns, refunds, shipping, offers, general-service policy documents)
+- Modify: `scripts/ingest_corpus.py`
+- Test: `tests/unit/rag/test_retail_corpus.py`
+- Modify: `README.md`
+
+RagAgent's flagship questions ("What is the cancellation policy?", "How do returns work?", "What is
+your refund policy?") can only be answered if the RAG index actually contains retail policy text. The
+existing corpus targets a different domain, so this task supplies the data source the PDF requires.
+
+- [ ] **Step 1: Write failing corpus grounding tests.**
+
+Add a test that ingests the retail corpus into a temporary index and asserts that a cancellation-policy
+query returns at least one chunk whose source is a retail policy document, and that a query with no
+supporting document returns the existing no-answer/insufficient-evidence result. Use the real ingest
+and retrieval code with a temporary index, not a fake retriever, since this task's purpose is to prove
+grounding.
+
+- [ ] **Step 2: Author concise, clearly-synthetic policy documents.**
+
+Write short, plainly-labelled synthetic policy documents for order cancellation (including the
+before-/after-shipment rule the OrderAgent policy predicates mirror), returns and the return window,
+refunds and refund timing, shipping/fulfilment, and how offers/discounts apply. Keep them consistent
+with the deterministic policy predicates in Tasks 5 and 6 so RAG explanations and enforced decisions
+do not contradict each other. Mark all content as synthetic prototype data.
+
+- [ ] **Step 3: Make ingestion reproducible.**
+
+Ensure `scripts/ingest_corpus.py` ingests `data/retail_corpus/` and that the container build/startup
+runs ingestion (or documents the one command to run) so a fresh environment answers policy questions
+without manual steps. Record the chunk count and embedding model in the README data-source section.
+
+- [ ] **Step 4: Run focused tests and commit.**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/rag/test_retail_corpus.py -q`
+
+Expected: PASS. Commit:
+
+```bash
+git add data/retail_corpus scripts/ingest_corpus.py tests/unit/rag/test_retail_corpus.py README.md
+git commit -m "feat: add retail policy knowledge corpus for RAG"
+```
+
+---
+
+### Task 11: Verify the complete agentic journey and record evidence
 
 **Files:**
 - Create: `tests/integration/test_agentic_customer_journey.py`
 - Modify: `scripts/run_evaluation.py`
-- Modify: `scripts/run_load_test.py`
+- Modify: `scripts/run_load.py`
+- Modify: `docker-compose.yml`
+- Modify: `.env.example`
 - Modify: `README.md`
 
 - [ ] **Step 1: Add the real-runtime integration journey.**
@@ -860,36 +994,55 @@ git commit -m "feat: make client support conversational"
 Use a seeded SQLite database and the configured local model or deterministic test doubles at the
 collaborator boundary. Exercise the service entry point, not only individual nodes:
 
-1. Submit `I want to cancel my order` and assert a clarification asks for an order number.
-2. Submit `ORD-9999` in the same conversation and assert a correction request, one lookup attempt,
+1. Submit `What products are on offer?` and assert ProductAgent returns database-sourced offers with
+   list price, discount, and computed discounted price — no invented values.
+2. Submit `Recommend a waterproof jacket under 150 EUR` and assert ProductAgent returns only in-stock
+   catalogue matches with database-derived `match_reason`, or a clear no-match message.
+3. Submit `What is the cancellation policy?` and assert RagAgent answers from the retail corpus with
+   citations.
+4. Submit `I want to cancel my order` and assert a clarification asks for an order number.
+5. Submit `ORD-9999` in the same conversation and assert a correction request, one lookup attempt,
    and durable active OrderAgent memory.
-3. Submit `ORD-8888` and assert a customer-safe no-information response, terminal handoff to the
+6. Submit `ORD-8888` and assert a customer-safe no-information response, terminal handoff to the
    main workflow, and no review request or cancellation mutation.
-4. Start a new conversation with `Please cancel order ORD-1001`, assert verified order/payment/
+7. Start a new conversation with `Please cancel order ORD-1001`, assert verified order/payment/
    fulfilment facts and a pending human-review request, and assert the order remains unchanged.
-5. Approve the review, assert one cancellation action and one customer notification; replay the
+8. Approve the review, assert one cancellation action and one customer notification; replay the
    approval and assert no duplicate mutation or notification.
-6. Submit a compound question about an order and a policy, assert both specialist results join and
-   the policy answer retains RAG citations.
+9. Run a return journey: submit `I want to return something`, supply the order and item over the next
+   turns, assert ReturnRefundAgent resumes from memory, produces a review packet with no side effect,
+   and that reviewer approval creates exactly one return request idempotently.
+10. Submit a compound question about an order and a policy, assert both specialist results join and
+    the policy answer retains RAG citations while the action is reported as pending review.
 
 Define a `seeded_service` fixture that constructs the production bootstrap with test configuration,
 and use explicit assertions against database rows, review rows, outbox rows, and operational events.
 
 - [ ] **Step 2: Make evaluation and load paths use the real topology.**
 
-Update evaluation cases to include product offer, order status, missing/corrected order ID, second
-lookup miss, cancellation review, rejection, approval replay, and compound order-plus-RAG requests.
-Ensure evaluation and load scripts call the same bootstrap/service path as the client. Do not report
-agentic routing evidence from a graph built without classifier, specialist, repository, or memory
-collaborators. Record latency, task count, tool calls, terminal status, review creation, and RAG
-citation presence.
+Update the evaluation set to 10–20 questions (the PDF's required range) covering product search,
+product offer/effective price, product recommendation, general policy (RAG), order status,
+missing/corrected order ID, second lookup miss, cancellation review, return clarification, rejection,
+approval replay, and compound order-plus-RAG requests. Ensure evaluation and load scripts call the same
+bootstrap/service path as the client. Do not report agentic routing evidence from a graph built without
+classifier, specialist, repository, or memory collaborators. Record latency, task count, tool calls,
+terminal status, review creation, and RAG citation presence.
+
+Re-run the 50–200 query load test against the new multi-specialist topology and re-identify the
+bottleneck: with generation serialized to `max_parallel_generations`, expect the classifier plus
+serialized specialist generations to dominate latency rather than the single RAG answer call, and give
+1–2 concrete optimization recommendations for the new profile (e.g. cache/skip the classifier for
+single-intent messages, or a smaller classifier model).
 
 - [ ] **Step 3: Run browser and runtime verification.**
 
 Start the application with the supported command, use the client chat for each natural-language
 journey, and inspect the internal trace and human-review views. Confirm the static fields are absent,
-the second lookup miss hands back to the main workflow, and approval is the only cancellation path.
-Capture the observed result and any environment limitation in the README evidence section.
+the second lookup miss hands back to the main workflow, and approval is the only mutation path.
+Verify container reproducibility: add the new `specialist_max_steps`, `conversation_memory_max_chars`,
+and any classifier settings to `.env.example` and `docker-compose.yml`, and confirm a fresh container
+runs the additive migrations and corpus ingestion so policy questions and retail actions work without
+manual setup. Capture the observed result and any environment limitation in the README evidence section.
 
 - [ ] **Step 4: Run all final quality gates.**
 
@@ -897,7 +1050,7 @@ Run:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest -q
-ruff check src tests scripts app.py streamlit_app.py
+ruff check src tests scripts app.py
 mypy --strict src tests
 git diff --check
 ```
@@ -908,7 +1061,7 @@ simulated-email, review, idempotency, and non-retail tests remain green.
 - [ ] **Step 5: Commit the evidence-backed verification.**
 
 ```bash
-git add tests/integration/test_agentic_customer_journey.py scripts/run_evaluation.py scripts/run_load_test.py README.md
+git add tests/integration/test_agentic_customer_journey.py scripts/run_evaluation.py scripts/run_load.py docker-compose.yml .env.example README.md
 git commit -m "test: verify agentic customer support journey"
 ```
 
@@ -916,10 +1069,13 @@ git commit -m "test: verify agentic customer support journey"
 
 ## Execution order and review gates
 
-Execute Tasks 1 through 10 in order. Each task must leave its focused tests passing and be committed
+Execute Tasks 1 through 11 in order. Each task must leave its focused tests passing and be committed
 before the next task starts. Keep the old static UI until the conversational path is exercised by the
-supervisor tests, then remove it in Task 9. Do not run a live evaluation claim until the fake-agent
-tests prove task IDs, reducers, memory transitions, and mutation boundaries. Do not claim cancellation
-support until the evidence shows: pending review leaves the order unchanged, approval mutates once,
-rejection leaves it unchanged, and duplicate approval is idempotent. The final handoff must identify
-the commits, test commands, and any environment-dependent checks that could not run.
+supervisor tests, then remove it in Task 9. The retail corpus (Task 10) must exist before the live
+RAG and integration checks in Task 11. Do not run a live evaluation claim until the fake-agent tests
+prove task IDs, reducers, memory transitions, and mutation boundaries. Do not claim cancellation,
+return, or refund support until the evidence shows, for each: pending review leaves the entity
+unchanged, approval mutates once, rejection leaves it unchanged, and duplicate approval is idempotent.
+Do not claim RAG policy support until a policy question returns an answer grounded in the retail
+corpus with citations. The final handoff must identify the commits, test commands, and any
+environment-dependent checks that could not run.
