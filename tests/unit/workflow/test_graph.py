@@ -4,7 +4,6 @@ from pwc_support.workflow.graph import (
     build_graph,
     normalize_markers,
     renumber_citations,
-    split_questions,
 )
 from tests.fakes import (
     FakeGenerator,
@@ -143,17 +142,6 @@ def test_graph_without_a_retrieval_runtime_never_fabricates_an_answer() -> None:
 
     assert result["outcome"]["status"] == "unable_to_answer"
     assert result["task_results"]["knowledge-1"].error_code == "RETRIEVAL_UNAVAILABLE"
-
-
-def test_split_questions_only_decomposes_substantive_parts() -> None:
-    assert split_questions("One question only?", limit=4) == ["One question only?"]
-    assert split_questions("What does PwC do? Which sectors are covered?", limit=4) == [
-        "What does PwC do?",
-        "Which sectors are covered?",
-    ]
-    assert split_questions("What does PwC do? Why?", limit=4) == ["What does PwC do? Why?"]
-    many = "What is one? What is two? What is three? What is four?"
-    assert len(split_questions(many, limit=2)) == 2
 
 
 def test_renumbering_gives_merged_answers_one_marker_series() -> None:

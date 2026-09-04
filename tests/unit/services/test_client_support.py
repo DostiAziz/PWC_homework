@@ -15,8 +15,76 @@ from pwc_support.storage.repositories import (
     ReviewRepository,
 )
 from pwc_support.workflow.graph import build_graph
+from pwc_support.agents.contracts import SpecialistName, SpecialistResult, SpecialistStatus
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 from tests.fakes import InMemoryMailbox, fake_rag_answerer, fake_toolbox
+
+
+
+def _build_fake_graph(toolbox=None):
+    def _dummy_specialist(name: SpecialistName, results: list[SpecialistResult]):
+        class State(TypedDict):
+            task: dict
+            message: dict
+            specialist_results: dict
+            conversation_memory: dict
+        def _node(state: State):
+            res = results.pop(0) if results else SpecialistResult(
+                task_id=state["task"]["task_id"],
+                specialist=name,
+                status=SpecialistStatus.COMPLETED,
+                customer_message="Dummy reply"
+            )
+            return {"specialist_results": {res.task_id: res}}
+        builder = StateGraph(State)
+        builder.add_node("run", _node)
+        builder.add_edge(START, "run")
+        builder.add_edge("run", END)
+        return builder.compile()
+
+    class FakeClassifier:
+        def classify(self, text: str) -> dict:
+            from pwc_support.domain.models import RoutingDecision, RoutingTask
+            from pwc_support.agents.contracts import SupportIntent
+            task = RoutingTask(
+                task_id="rag-1",
+                intent=SupportIntent.KNOWLEDGE_QUERY,
+                specialist=SpecialistName.RAG,
+                user_text=text,
+                entities={},
+                depends_on=()
+            )
+            return RoutingDecision(tasks=(task,), classifier_model="test", classifier_prompt_version="1")
+
+    answerer = fake_rag_answerer()
+    from pwc_support.domain.models import RagRequest, Citation
+    def _rag_node(state):
+        ans = answerer.run(RagRequest(question=state["message"]["body"]))
+        res = SpecialistResult(
+            task_id=state["task"]["task_id"],
+            specialist=SpecialistName.RAG,
+            status=SpecialistStatus.COMPLETED,
+            customer_message=ans.get("answer", ""),
+            citations=list(ans.get("citations", []))
+        )
+        return {"specialist_results": {res.task_id: res}}
+    
+    rag_builder = StateGraph(dict)
+    rag_builder.add_node("run", _rag_node)
+    rag_builder.add_edge(START, "run")
+    rag_builder.add_edge("run", END)
+
+    return build_graph(
+        classifier=FakeClassifier(),
+        order_agent=_dummy_specialist(SpecialistName.ORDER, []),
+        product_agent=_dummy_specialist(SpecialistName.PRODUCT, []),
+        return_refund_agent=_dummy_specialist(SpecialistName.RETURN_REFUND, []),
+        rag_agent=rag_builder.compile(),
+        conversation_memory_repo=None,
+        toolbox=toolbox,
+    )
 
 
 def _service(tmp_path: Path, *, mailbox: InMemoryMailbox | None = None) -> ClientSupportService:
@@ -25,13 +93,10 @@ def _service(tmp_path: Path, *, mailbox: InMemoryMailbox | None = None) -> Clien
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
     dispatcher = OutboxDispatcher(OutboxRepository(database), MailboxRepository(database), cases)
-    graph = build_graph(
-        rag_answerer=fake_rag_answerer(),
-        toolbox=Toolbox(
-            case_tool=CaseTool(cases),
-            mailbox_tool=MailboxTool(mailbox) if mailbox is not None else None,
-        ),
-    )
+    graph = _build_fake_graph(Toolbox(
+        case_tool=CaseTool(cases),
+        mailbox_tool=MailboxTool(mailbox) if mailbox is not None else None,
+    ))
     return ClientSupportService(
         graph,
         reviews=reviews,
@@ -47,7 +112,7 @@ def test_general_question_is_answered_and_its_run_is_observable(tmp_path: Path) 
 
     assert run.outcome.status.value == "answered"
     assert run.outcome.citations[0].marker == "[S1]"
-    assert run.visited_nodes[:3] == ["intake", "triage", "plan_work"]
+    assert run.visited_nodes[:3] == ["intake", "load_conversation_memory", "classify_and_plan"]
     assert run.total_duration_ms >= 0.0
 
 
@@ -58,11 +123,11 @@ def test_completed_provider_message_is_not_processed_twice_after_restart(
     database.initialize()
 
     first_service = ClientSupportService(
-        build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox()),
+        _build_fake_graph(fake_toolbox()),
         database=database,
     )
     second_service = ClientSupportService(
-        build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox()),
+        _build_fake_graph(fake_toolbox()),
         database=database,
     )
 
@@ -90,10 +155,7 @@ def test_review_delivery_preserves_email_recipient_thread_and_subject(tmp_path: 
     review_service = ReviewService(
         reviews, dispatcher, allowed_reviewer_ids=frozenset({"specialist-1"})
     )
-    graph = build_graph(
-        rag_answerer=fake_rag_answerer(),
-        toolbox=Toolbox(case_tool=CaseTool(cases)),
-    )
+    graph = _build_fake_graph(Toolbox(case_tool=CaseTool(cases)))
     service = ClientSupportService(
         graph,
         reviews=reviews,
@@ -204,7 +266,7 @@ def test_email_submission_keeps_one_thread_and_delivers_through_the_mailbox(
 def test_node_events_are_persisted_for_every_run(tmp_path: Path) -> None:
     database = Database(tmp_path / "operations.sqlite3")
     database.initialize()
-    graph = build_graph(rag_answerer=fake_rag_answerer(), toolbox=fake_toolbox())
+    graph = _build_fake_graph(fake_toolbox())
     service = ClientSupportService(graph, database=database)
 
     run = service.submit(body="What services does PwC provide?", client_id="client-1")
@@ -232,8 +294,7 @@ def test_second_enquiry_does_not_inherit_the_first_run_state(tmp_path: Path) -> 
     assert first.outcome.workflow_run_id != second.outcome.workflow_run_id
     assert first.outcome.conversation_id == second.outcome.conversation_id == conversation
     assert second.visited_nodes == first.visited_nodes
-    assert len(second.rag_results) == 1
-    assert set(second.state["task_results"]) == {"knowledge-1"}
+    assert len(second.state.get("specialist_results", {})) == 1
 
 
 def test_review_run_reports_the_complete_async_path(tmp_path: Path) -> None:
@@ -243,10 +304,12 @@ def test_review_run_reports_the_complete_async_path(tmp_path: Path) -> None:
 
     assert run.visited_nodes == [
         "intake",
-        "triage",
-        "gather_evidence",
-        "human_review",
-        "finalise_case",
+        "load_conversation_memory",
+        "classify_and_plan",
+        "join_specialist_results",
+        "compose_reply",
+        "prepare_escalation",
+        "finalise",
     ]
 
 

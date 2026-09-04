@@ -49,6 +49,27 @@ class ReviewService:
         review = self.reviews.find(review_id)
         if review is None:
             raise KeyError(review_id)
+        if (
+            self.retail_approvals is not None
+            and kind
+            in {
+                ReviewDecisionKind.APPROVE_REFUND,
+                ReviewDecisionKind.REJECT_REFUND,
+                ReviewDecisionKind.APPROVE_RETURN,
+                ReviewDecisionKind.REJECT_RETURN,
+                ReviewDecisionKind.APPROVE_CANCELLATION,
+                ReviewDecisionKind.REJECT_CANCELLATION,
+            }
+        ):
+            for action in review.proposed_actions:
+                if action.action_type in {"retail_return", "retail_cancellation"}:
+                    self.retail_approvals.apply(
+                        action=action.model_dump(mode="json"), 
+                        kind=kind.value,
+                        review_id=str(review_id)
+                    )
+                    break
+
         result = self.reviews.decide(
             review_id=review_id,
             decision_id=decision_id,
@@ -58,22 +79,6 @@ class ReviewService:
             reviewed_text=reviewed_text,
             reason=reason,
         )
-        if (
-            not result.replayed
-            and self.retail_approvals is not None
-            and kind
-            in {
-                ReviewDecisionKind.APPROVE_REFUND,
-                ReviewDecisionKind.REJECT_REFUND,
-                ReviewDecisionKind.APPROVE_RETURN,
-            }
-        ):
-            for action in review.proposed_actions:
-                if action.action_type == "retail_return":
-                    self.retail_approvals.apply(
-                        action=action.model_dump(mode="json"), kind=kind.value
-                    )
-                    break
         if self.dispatcher is not None and result.outbox_key:
             self.dispatcher.dispatch_once(worker_id="review-service")
         return result

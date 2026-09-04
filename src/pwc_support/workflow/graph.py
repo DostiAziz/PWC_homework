@@ -1,76 +1,54 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import time
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
+from pwc_support.agents.classifier import IntentClassifier
+from pwc_support.agents.contracts import (
+    ConversationMemory,
+    SpecialistName,
+    SpecialistStatus,
+)
 from pwc_support.domain.models import (
-    CaseStatus,
     Citation,
-    DraftReply,
     OutcomeStatus,
-    PlannedTask,
-    ProposedAction,
-    RagRequest,
     Route,
-    TaskKind,
-    TaskResult,
-    TaskStatus,
-    Verification,
-    WorkPlan,
 )
 from pwc_support.domain.state import SupportState
-from pwc_support.rag.answer import RagAnswerer
-from pwc_support.rag.subgraph import to_rag_result
 from pwc_support.workflow.policy import ReviewPolicy
 from pwc_support.workflow.tools import Toolbox, find_case_reference
 
+# (Keep normalize_markers and bracket translation here)
 MARKER = re.compile(r"\[S\d+\]")
-# gpt-oss and other local models often emit lookalike bracket pairs around a citation
-# marker. Normalising them keeps a genuinely grounded answer from being withheld, while
-# still letting verification catch markers that match no retrieved source.
 LOOKALIKE_BRACKETS = str.maketrans(
     {
         "\u3010": "[",
-        "\u3011": "]",  # CJK lenticular brackets
+        "\u3011": "]",
         "\uff3b": "[",
-        "\uff3d": "]",  # fullwidth square brackets
+        "\uff3d": "]",
         "\u3014": "[",
-        "\u3015": "]",  # tortoise shell brackets
+        "\u3015": "]",
         "\u2768": "[",
-        "\u2769": "]",  # medium parenthesis ornaments
+        "\u2769": "]",
     }
 )
 
 
 def normalize_markers(text: str) -> str:
-    """Rewrite lookalike bracket pairs so citation markers are recognisable ASCII."""
     return text.translate(LOOKALIKE_BRACKETS)
 
 
-GREETING_REPLY = (
-    "Hello, and welcome to PwC client support. Ask me about publicly described PwC "
-    "services, industries, or how the PwC network is organised, and I will answer from "
-    "our published information with sources."
-)
-CLARIFICATION_REPLY = (
-    "I can help, but I need a little more detail. Please tell me which service, "
-    "industry, or territory your question is about."
-)
-UNSUPPORTED_REPLY = (
-    "I could not find published information that answers this question, so I will not "
-    "guess. Please rephrase it, or ask for a specialist if the matter is client specific."
-)
-PENDING_REVIEW_REPLY = (
-    "Thank you. This enquiry needs a PwC specialist, so I have logged it for review "
-    "rather than answering automatically. A specialist will follow up."
-)
+GREETING_REPLY = "Hello, and welcome to PwC client support. Ask me about publicly described PwC services, industries, or how the PwC network is organised, and I will answer from our published information with sources."
+CLARIFICATION_REPLY = "I can help, but I need a little more detail. Please tell me which service, industry, or territory your question is about."
+UNSUPPORTED_REPLY = "I could not find published information that answers this question, so I will not guess. Please rephrase it, or ask for a specialist if the matter is client specific."
+PENDING_REVIEW_REPLY = "Thank you. This enquiry needs a PwC specialist, so I have logged it for review rather than answering automatically. A specialist will follow up."
 
 
 def _event(node: str, event_type: str, started: float, **details: Any) -> dict[str, Any]:
@@ -82,19 +60,7 @@ def _event(node: str, event_type: str, started: float, **details: Any) -> dict[s
     }
 
 
-def split_questions(body: str, *, limit: int) -> list[str]:
-    """Split a multi-part enquiry so each question can be retrieved independently."""
-    parts = [part.strip() for part in re.split(r"(?<=\?)\s+", body) if part.strip()]
-    substantive = [part for part in parts if len(re.findall(r"[A-Za-z0-9]+", part)) >= 3]
-    if len(substantive) < 2:
-        return [body]
-    return substantive[:limit]
-
-
-def renumber_citations(
-    results: list[dict[str, Any]],
-) -> tuple[str, tuple[Citation, ...]]:
-    """Merge per-task answers into one reply with a single, non-colliding marker series."""
+def renumber_citations(results: list[dict[str, Any]]) -> tuple[str, tuple[Citation, ...]]:
     texts: list[str] = []
     citations: list[Citation] = []
     for result in results:
@@ -104,8 +70,8 @@ def renumber_citations(
         mapping: list[tuple[str, str]] = []
         for citation in result.get("citations", []):
             marker = f"[S{len(citations) + 1}]"
-            citations.append(Citation.model_validate({**citation, "marker": marker}))
-            mapping.append((str(citation["marker"]), marker))
+            citations.append(Citation.model_validate({**citation.model_dump(), "marker": marker}))
+            mapping.append((str(citation.marker), marker))
         for old, new in sorted(mapping, key=lambda pair: -len(pair[0])):
             text = text.replace(old, f"\x00{new}\x00")
         texts.append(text.replace("\x00", ""))
@@ -114,13 +80,16 @@ def renumber_citations(
 
 def build_graph(
     *,
+    classifier: IntentClassifier,
+    order_agent: CompiledStateGraph,
+    product_agent: CompiledStateGraph,
+    return_refund_agent: CompiledStateGraph,
+    rag_agent: CompiledStateGraph,
+    conversation_memory_repo: Any,  # We actually don't call repo here, state has conversation_memory dict
     policy: ReviewPolicy | None = None,
-    rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
-    retail_tools: list[Any] | None = None,
     max_planned_tasks: int = 4,
-) -> Any:
-    """Compile the main support workflow: triage, decomposition, tools, review, delivery."""
+) -> CompiledStateGraph:
     review_policy = policy or ReviewPolicy.default()
     tools = toolbox or Toolbox()
 
@@ -150,27 +119,34 @@ def build_graph(
             ],
         }
 
-    def triage(state: SupportState) -> dict[str, Any]:
+    def load_conversation_memory(state: SupportState) -> dict[str, Any]:
+        started = time.perf_counter()
+        active_specialist = None
+        mem_dict = state.get("conversation_memory")
+        if mem_dict:
+            mem = ConversationMemory.model_validate(mem_dict)
+            if mem.active_specialist:
+                active_specialist = mem.active_specialist.value
+        return {
+            "active_specialist": active_specialist,
+            "events": [
+                _event(
+                    "load_conversation_memory",
+                    "completed",
+                    started,
+                    active_specialist=active_specialist,
+                )
+            ],
+        }
+
+    def classify_and_plan(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         body = str(state["message"]["body"])
+
+        # Triage for cases
         decision = review_policy.evaluate(body)
         route = review_policy.classify_route(body)
-        retail_lookup = any(
-            word in body.casefold()
-            for word in ("product", "jacket", "backpack", "headphones", "offer", "order")
-        )
-        retail_action = any(word in body.casefold() for word in ("return", "refund", "send back"))
-        if retail_lookup and not retail_action and not decision.requires_review:
-            route = Route.PLAN
         categories = sorted(category.value for category in decision.categories)
-        snapshot_payload = {
-            "body": body,
-            "route": route.value,
-            "categories": categories,
-        }
-        snapshot_hash = hashlib.sha256(
-            json.dumps(snapshot_payload, sort_keys=True).encode()
-        ).hexdigest()
         snapshot = {
             "input_fingerprint": hashlib.sha256(body.encode()).hexdigest(),
             "provider_message_id": str(state.get("inbound_message_id") or state["run_id"]),
@@ -178,448 +154,215 @@ def build_graph(
             "deterministic_match": bool(decision.matched_rule_ids),
             "matched_rule_ids": list(decision.matched_rule_ids),
             "pre_retrieval_route": route.value,
-            "snapshot_hash": snapshot_hash,
+            "snapshot_hash": hashlib.sha256(body.encode()).hexdigest(),
         }
+
+        triage_dict = {
+            "intent": "client_enquiry",
+            "route": route.value,
+            "review_categories": categories,
+            "case_reference": find_case_reference(body),
+            "confidence": 0.9 if route is not Route.CLARIFY else 0.4,
+        }
+
+        # Classification
+        if route in (Route.GREETING, Route.CLARIFY, Route.UNSUPPORTED):
+            return {
+                "triage": triage_dict,
+                "routing_snapshot": snapshot,
+                "events": [_event("classify_and_plan", "static_route", started, route=route.value)],
+            }
+
+        active_sp = state.get("active_specialist")
+        if active_sp:
+            # Route directly to active specialist for clarification
+            return {
+                "triage": triage_dict,
+                "routing_snapshot": snapshot,
+                "routing_tasks": [
+                    {"task_id": "resume-1", "specialist": active_sp, "user_text": body}
+                ],
+                "events": [
+                    _event("classify_and_plan", "resumed_specialist", started, specialist=active_sp)
+                ],
+            }
+
+        routing_decision = classifier.classify(body)
+        routing_tasks = [t.model_dump(mode="json") for t in routing_decision.tasks]
+
         return {
-            "triage": {
-                "intent": "client_enquiry",
-                "route": route.value,
-                "review_categories": categories,
-                "case_reference": find_case_reference(body),
-                "confidence": 0.9 if route is not Route.CLARIFY else 0.4,
-            },
+            "triage": triage_dict,
             "routing_snapshot": snapshot,
+            "routing_decision": routing_decision.model_dump(mode="json"),
+            "routing_tasks": routing_tasks,
             "events": [
-                _event(
-                    "triage", "completed", started, route=route.value, review_categories=categories
-                )
+                _event("classify_and_plan", "classified", started, tasks=len(routing_tasks))
             ],
         }
 
-    def route_after_triage(
+    def route_after_planning(
         state: SupportState,
-    ) -> Literal["plan_work", "gather_evidence", "respond_directly"]:
+    ) -> Literal["respond_directly"] | list[Send]:
         route = state["triage"]["route"]
-        if route == Route.REVIEW.value:
-            return "gather_evidence"
         if route in (Route.GREETING.value, Route.CLARIFY.value, Route.UNSUPPORTED.value):
             return "respond_directly"
-        return "plan_work"
-
-    def gather_evidence(state: SupportState) -> dict[str, Any]:
-        """Research an escalated enquiry for the specialist without drafting a reply.
-
-        A sensitive enquiry must never have the model write an answer, so this runs the
-        RAG subgraph in evidence-only mode: the specialist opens the review with the
-        relevant published sources already in front of them instead of a blank box.
-        """
-        started = time.perf_counter()
-        body = str(state["message"]["body"])
-        if (
-            retail_tools
-            and any(word in body.casefold() for word in ("return", "refund"))
-            and len(retail_tools) > 5
-        ):
-            order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
-            item_match = re.search(r"\bITEM-[A-Z0-9-]+\b", body, re.IGNORECASE)
-            if order_match and item_match:
-                action = retail_tools[5].invoke(
+        sends = []
+        for t in state.get("routing_tasks", []):
+            sp = t["specialist"]
+            node_name = f"{sp}_agent"
+            sends.append(
+                Send(
+                    node_name,
                     {
-                        "order_id": order_match.group(0).upper(),
-                        "item_id": item_match.group(0).upper(),
-                        "reason": body,
-                        "idempotency_key": f"chat-{state['run_id']}",
-                    }
+                        "message": state["message"],
+                        "run_id": state["run_id"],
+                        "conversation_id": state["conversation_id"],
+                        "client_id": state["client_id"],
+                        "conversation_memory": state.get("conversation_memory"),
+                        "task": t,
+                    },
                 )
-                return {
-                    "action_proposal": {**action, "idempotency_key": f"chat-{state['run_id']}"},
-                    "events": [
-                        _event(
-                            "gather_evidence",
-                            "retail_return_evaluated",
-                            started,
-                            eligible=bool((action.get("eligibility") or {}).get("eligible")),
-                        )
-                    ],
-                }
-        if rag_answerer is None:
-            return {
-                "events": [
-                    _event("gather_evidence", "skipped", started, reason="no_retrieval_runtime")
-                ]
-            }
-        bundle = rag_answerer.gather_evidence(RagRequest(question=body))
-        return {
-            "evidence": bundle.model_dump(mode="json"),
-            "events": [
-                _event("gather_evidence", "completed", started, sources=len(bundle.citations))
-            ],
-        }
+            )
+        return sends
 
-    def plan_work(state: SupportState) -> dict[str, Any]:
+    def join_specialist_results(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
-        body = str(state["message"]["body"])
-        if (
-            retail_tools
-            and re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
-            and "order" in body.casefold()
-        ):
-            order_match = re.search(r"\bORD-[A-Z0-9-]+\b", body, re.IGNORECASE)
-            assert order_match is not None
-            order_id = order_match.group(0).upper()
-            result = retail_tools[4].invoke(
-                {"order_id": order_id, "customer_id": str(state.get("client_id") or "")}
-            )
-            order = result.get("order") if isinstance(result, dict) else None
-            answer = (
-                f"Order {order_id}: {order['status']}"
-                if order
-                else f"Order {order_id} was not found for this customer."
-            )
-            return {
-                "plan": {"tasks": []},
-                "expected_task_ids": [],
-                "retail_intent": "order_status",
-                "retail_answer": answer,
-                "events": [_event("plan_work", "retail_order_lookup", started, found=bool(order))],
-            }
-        if retail_tools and any(
-            word in body.casefold()
-            for word in ("product", "jacket", "backpack", "headphones", "offer")
-        ):
-            query = next(
-                (
-                    word
-                    for word in ("jacket", "backpack", "headphones", "offer", "product")
-                    if word in body.casefold()
-                ),
-                body,
-            )
-            result = retail_tools[0].invoke({"query": query})
-            products = result.get("products", []) if isinstance(result, dict) else []
-            answer = (
-                "\n".join(
-                    f"{item['name']}: {item['price']} {item['currency']} ({item['stock']} in stock)"
-                    for item in products
-                )
-                or "No matching products found."
-            )
-            return {
-                "plan": {"tasks": []},
-                "expected_task_ids": [],
-                "retail_intent": "product_search",
-                "retail_answer": answer,
-                "events": [_event("plan_work", "retail_lookup", started, count=len(products))],
-            }
-        reference = state["triage"].get("case_reference")
-        knowledge_limit = max_planned_tasks - (1 if reference else 0)
-        tasks = [
-            PlannedTask(
-                task_id=f"knowledge-{index}",
-                kind=TaskKind.KNOWLEDGE_QUERY,
-                input=question[:2000],
-            )
-            for index, question in enumerate(split_questions(body, limit=knowledge_limit), start=1)
-        ]
-        if reference:
-            tasks.append(PlannedTask(task_id="case-1", kind=TaskKind.CASE_LOOKUP, input=reference))
-        plan = WorkPlan(tasks=tuple(tasks))
-        return {
-            "plan": plan.model_dump(mode="json"),
-            "expected_task_ids": [task.task_id for task in plan.tasks],
-            "events": [
-                _event(
-                    "plan_work",
-                    "completed",
-                    started,
-                    task_ids=[task.task_id for task in plan.tasks],
-                    task_kinds=[task.kind.value for task in plan.tasks],
-                )
-            ],
-        }
-
-    def fan_out_tasks(state: SupportState) -> list[Send] | str:
-        """Dispatch every planned task to an independent worker in one superstep."""
-        if state.get("retail_intent") in {"product_search", "order_status"}:
-            return "compose_reply"
-        return [
-            Send(
-                "execute_task",
-                {
-                    "task": task,
-                    "message": state["message"],
-                    "run_id": state["run_id"],
-                    "conversation_id": state["conversation_id"],
-                    "client_id": state["client_id"],
-                },
-            )
-            for task in state["plan"]["tasks"]
-        ]
-
-    def execute_task(state: SupportState) -> dict[str, Any]:
-        started = time.perf_counter()
-        task = PlannedTask.model_validate(state["task"])
-        if task.kind is TaskKind.CASE_LOOKUP:
-            return _execute_case_lookup(task, started)
-        return _execute_knowledge_query(task, started)
-
-    def _execute_case_lookup(task: PlannedTask, started: float) -> dict[str, Any]:
-        if tools.case_tool is None:
-            result = TaskResult(
-                task_id=task.task_id, status=TaskStatus.SKIPPED, error_code="TOOL_UNAVAILABLE"
-            )
-            return {
-                "task_results": {task.task_id: result},
-                "events": [_event("execute_task", "skipped", started, task_id=task.task_id)],
-            }
-        lookup, call = tools.case_tool.lookup(task.input)
-        result = TaskResult(
-            task_id=task.task_id,
-            status=TaskStatus.SUCCESS if lookup.found else TaskStatus.FAILURE,
-            payload=lookup.model_dump(mode="json"),
-            error_code=None if lookup.found else "CASE_NOT_FOUND",
-        )
-        return {
-            "task_results": {task.task_id: result},
-            "tool_calls": [call.as_event()],
-            "events": [
-                _event(
-                    "execute_task",
-                    "completed",
-                    started,
-                    task_id=task.task_id,
-                    kind=task.kind.value,
-                    found=lookup.found,
-                )
-            ],
-        }
-
-    def _execute_knowledge_query(task: PlannedTask, started: float) -> dict[str, Any]:
-        if rag_answerer is None:
-            result = TaskResult(
-                task_id=task.task_id,
-                status=TaskStatus.SKIPPED,
-                error_code="RETRIEVAL_UNAVAILABLE",
-            )
-            return {
-                "task_results": {task.task_id: result},
-                "events": [
-                    _event(
-                        "execute_task",
-                        "skipped",
-                        started,
-                        task_id=task.task_id,
-                        reason="no_retrieval_runtime",
-                    )
-                ],
-            }
-        rag_state = rag_answerer.run(RagRequest(question=task.input))
-        rag_result = to_rag_result(rag_state)
-        timings = {
-            f"rag.{node}": value for node, value in rag_state.get("node_timings", {}).items()
-        }
-        payload = rag_result.model_dump(mode="json")
-        payload["task_id"] = task.task_id
-        payload["node_timings"] = timings
-        answered = rag_result.status == "answered"
-        result = TaskResult(
-            task_id=task.task_id,
-            status=TaskStatus.SUCCESS if answered else TaskStatus.FAILURE,
-            payload={"status": rag_result.status, "citations": len(rag_result.citations)},
-            error_code=None if answered else "EVIDENCE_INSUFFICIENT",
-        )
-        return {
-            "task_results": {task.task_id: result},
-            "rag_results": [payload],
-            "events": [
-                _event(
-                    "execute_task",
-                    "completed",
-                    started,
-                    task_id=task.task_id,
-                    kind=task.kind.value,
-                    status=rag_result.status,
-                    citations=len(rag_result.citations),
-                    **timings,
-                )
-            ],
-        }
-
-    def case_tools(state: SupportState) -> dict[str, Any]:
-        """Join the fan-out and record the enquiry in the durable case system."""
-        started = time.perf_counter()
-        if tools.case_tool is None:
-            return {"events": [_event("case_tools", "skipped", started, reason="no_case_tool")]}
-        existing = _resolved_case_id(state)
-        if existing is not None:
-            return {
-                "case_id": existing,
-                "events": [
-                    _event("case_tools", "completed", started, case_id=existing, operation="reused")
-                ],
-            }
-        categories = state["triage"].get("review_categories") or []
-        if not categories and not state["triage"].get("case_reference"):
-            return {
-                "events": [
-                    _event("case_tools", "skipped", started, reason="routine_enquiry_no_case")
-                ]
-            }
-        record, call = tools.case_tool.open_case(
-            conversation_id=UUID(state["conversation_id"]),
-            client_id=state["client_id"],
-            category=str(categories[0]) if categories else "general_enquiry",
-            summary=str(state["message"]["body"]),
-        )
-        return {
-            "case_id": record.case_id,
-            "tool_calls": [call.as_event()],
-            "proposed_actions": [
-                ProposedAction(
-                    action_type="create_case",
-                    description=f"Track this enquiry as case {record.case_id}.",
-                    requires_review=False,
-                ).model_dump(mode="json")
-            ],
-            "events": [
-                _event(
-                    "case_tools", "completed", started, case_id=record.case_id, operation="opened"
-                )
-            ],
-        }
-
-    def _resolved_case_id(state: SupportState) -> str | None:
-        for result in state.get("task_results", {}).values():
-            if result.status is TaskStatus.SUCCESS and result.payload.get("found"):
-                case = result.payload.get("case") or {}
-                case_id = case.get("case_id")
-                if case_id:
-                    return str(case_id)
-        return None
+        return {"events": [_event("join_specialist_results", "completed", started)]}
 
     def compose_reply(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
-        if state.get("retail_intent") in {"product_search", "order_status"}:
-            return {
-                "draft": {
-                    "text": str(state.get("retail_answer", "No matching products found.")),
-                    "citation_markers": [],
-                    "citations": [],
-                    "response_version": 1,
-                    "source": "system",
-                },
-                "events": [_event("compose_reply", "retail", started)],
-            }
-        answered = [
-            result for result in state.get("rag_results", []) if result.get("status") == "answered"
-        ]
-        text, citations = renumber_citations(answered)
-        if not text:
-            return {
-                "draft": {"text": "", "citation_markers": [], "response_version": 1},
-                "events": [
-                    _event(
-                        "compose_reply",
-                        "insufficient_evidence",
-                        started,
-                        knowledge_results=len(state.get("rag_results", [])),
-                    )
-                ],
-            }
-        draft = DraftReply(
-            text=text[:1500],
-            citation_markers=tuple(citation.marker for citation in citations),
-            response_version=int(state.get("draft_version", 1)),
+        sp_results = state.get("specialist_results", {})
+
+        clarification_required = any(
+            r.status == SpecialistStatus.NEEDS_INFORMATION for r in sp_results.values()
         )
+        unable = any(r.status == SpecialistStatus.UNSUPPORTED for r in sp_results.values())
+
+        reply_texts = []
+        for task_id, res in sorted(sp_results.items()):
+            if res.customer_message:
+                reply_texts.append(res.customer_message)
+        
+        all_citations = []
+        for task_id, res in sorted(sp_results.items()):
+            if res.citations:
+                all_citations.extend(res.citations)
+        
+        # Combine the texts
+        draft_text = "\n\n".join(reply_texts)
+        rag_results = []
+        
+        # Sort results by task_id to maintain deterministic order
+        for task_id, res in sorted(sp_results.items()):
+            if res.specialist == SpecialistName.RAG and res.customer_message:
+                rag_results.append({"answer": res.customer_message, "citations": res.citations or []})
+
+        # Renumber citations if RAG results are present
+        if rag_results:
+            text, citations = renumber_citations(rag_results)
+            reply_texts = [
+                text if res.specialist == SpecialistName.RAG else res.customer_message
+                for task_id, res in sorted(sp_results.items())
+                if res.customer_message
+            ]
+            final_citations = [c.model_dump(mode="json") for c in citations]
+        else:
+            final_citations = []
+
+        final_text = "\n\n".join(reply_texts)
+
+        outcome_status = OutcomeStatus.ANSWERED.value
+        if clarification_required:
+            outcome_status = OutcomeStatus.CLARIFICATION_REQUIRED.value
+        elif unable and not final_text:
+            outcome_status = OutcomeStatus.UNABLE_TO_ANSWER.value
+
         return {
             "draft": {
-                **draft.model_dump(mode="json"),
-                "citations": [citation.model_dump(mode="json") for citation in citations],
+                "text": final_text,
+                "citations": final_citations,
+                "citation_markers": [c["marker"] for c in final_citations],
+                "response_version": 1,
+                "source": "system",
             },
-            "events": [
-                _event(
-                    "compose_reply",
-                    "completed",
-                    started,
-                    citations=len(citations),
-                    characters=len(draft.text),
-                )
-            ],
+            "outcome": {"status": outcome_status},
+            "events": [_event("compose_reply", "completed", started)],
         }
 
-    def verify_response(state: SupportState) -> dict[str, Any]:
-        """Reject ungrounded drafts: no evidence, no citations, or invented markers."""
+    def prepare_escalation(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
-        draft = state.get("draft", {})
-        text = str(draft.get("text", ""))
-        citations = draft.get("citations", [])
-        if state.get("retail_intent") in {"product_search", "order_status"}:
-            verification = Verification(
-                route="release", reason="Structured product facts supplied by database tool"
+        categories = state["triage"].get("review_categories") or []
+        sp_results = state.get("specialist_results", {})
+        review_requests = [
+            r for r in sp_results.values() if r.status == SpecialistStatus.REVIEW_REQUIRED
+        ]
+
+        if not categories and not review_requests:
+            return {"events": [_event("prepare_escalation", "skipped", started)]}
+
+        review_id = str(uuid4())
+
+        # Open Case
+        case_id = None
+        tool_calls = []
+        if tools.case_tool is not None:
+            record, call = tools.case_tool.open_case(
+                conversation_id=UUID(state["conversation_id"]),
+                client_id=state["client_id"],
+                category=str(categories[0]) if categories else "specialist_review",
+                summary=str(state["message"]["body"]),
             )
-            return {
-                "verification": verification.model_dump(mode="json"),
-                "events": [_event("verify_response", "release", started, citations=0)],
-            }
-        known = {str(citation["marker"]) for citation in citations}
-        invented = sorted(set(MARKER.findall(text)) - known)
-        if not text or not citations:
-            verification = Verification(
-                route="review" if _needs_specialist(state) else "revise",
-                error_code="EVIDENCE_INSUFFICIENT",
-                reason="No grounded evidence was selected for this enquiry.",
-            )
-        elif invented:
-            verification = Verification(
-                route="review",
-                error_code="MODEL_OUTPUT_INVALID",
-                reason=f"Draft cites unknown sources: {', '.join(invented)}.",
-            )
-        elif not MARKER.search(text):
-            verification = Verification(
-                route="revise",
-                error_code="MODEL_OUTPUT_INVALID",
-                reason="Draft carries no citation marker, so its claims are unattributed.",
-            )
-        else:
-            verification = Verification(
-                route="release",
-                citations=tuple(Citation.model_validate(item) for item in citations),
-            )
-        return {
-            "verification": verification.model_dump(mode="json"),
-            "events": [
-                _event(
-                    "verify_response",
-                    verification.route,
-                    started,
-                    error_code=verification.error_code,
-                    citations=len(citations),
-                )
-            ],
+            case_id = record.case_id
+            tool_calls.append(call.as_event())
+
+        proposed_actions = []
+        for r in review_requests:
+            if r.action_proposal:
+                proposed_actions.append(r.action_proposal)
+
+        proposed_reply = state.get("draft", {}).copy()
+        proposed_reply.pop("citations", None)
+        if not proposed_reply.get("text"):
+            proposed_reply = None
+
+        request = {
+            "review_id": review_id,
+            "case_id": case_id,
+            "run_id": state["run_id"],
+            "conversation_id": state["conversation_id"],
+            "categories": categories,
+            "original_message": state["message"]["body"],
+            "proposed_reply": proposed_reply,
+            "proposed_actions": proposed_actions,
+            "evidence": state.get("draft", {}).get("citations", []),
+            "evidence_state": "selected"
+            if state.get("draft", {}).get("citations", [])
+            else "unavailable",
+            "routing_provenance": state.get("routing_snapshot"),
+            "delivery_recipient": state.get("client_id"),
+            "delivery_thread_id": state.get("thread_id"),
+            "delivery_subject": state.get("message", {}).get("subject") or "Re: your enquiry",
+            "response_version": 1,
         }
-
-    def _needs_specialist(state: SupportState) -> bool:
-        """Escalate an evidence failure only when the enquiry is genuinely consequential."""
-        if state["triage"].get("review_categories"):
-            return True
-        return _resolved_case_id(state) is not None
-
-    def route_after_verification(
-        state: SupportState,
-    ) -> Literal["finalise_case", "human_review", "respond_directly"]:
-        route = state["verification"]["route"]
-        if route == "release":
-            return "finalise_case"
-        return "human_review" if route == "review" else "respond_directly"
+        return {
+            "review_request": request,
+            "case_id": case_id,
+            "tool_calls": tool_calls,
+            "outcome": {"status": OutcomeStatus.PENDING_REVIEW.value, "review_id": review_id},
+            "draft": {
+                "text": PENDING_REVIEW_REPLY,
+                "citations": [],
+                "citation_markers": [],
+                "response_version": 1,
+                "source": "system",
+            },
+            "events": [_event("prepare_escalation", "completed", started, review_id=review_id)],
+        }
 
     def respond_directly(state: SupportState) -> dict[str, Any]:
-        """Deterministic replies that must never consume retrieval or model capacity."""
         started = time.perf_counter()
         route = state["triage"]["route"]
-        if state.get("verification", {}).get("route") == "revise":
-            message, status = UNSUPPORTED_REPLY, OutcomeStatus.UNABLE_TO_ANSWER
-        elif route == Route.GREETING.value:
+        if route == Route.GREETING.value:
             message, status = GREETING_REPLY, OutcomeStatus.ANSWERED
         elif route == Route.CLARIFY.value:
             message, status = CLARIFICATION_REPLY, OutcomeStatus.CLARIFICATION_REQUIRED
@@ -637,92 +380,24 @@ def build_graph(
             "events": [_event("respond_directly", status.value, started, route=route)],
         }
 
-    def human_review(state: SupportState) -> dict[str, Any]:
-        started = time.perf_counter()
-        review_id = str(state.get("review_request", {}).get("review_id") or uuid4())
-        # An escalation reaching a specialist must be a tracked case, even when triage
-        # routed here directly and the case tool node was never visited.
-        case_id, opened = _ensure_case(state)
-        request = {
-            "review_id": review_id,
-            "case_id": case_id,
-            "run_id": state["run_id"],
-            "conversation_id": state["conversation_id"],
-            "categories": state["triage"].get("review_categories", []),
-            "original_message": state["message"]["body"],
-            "proposed_reply": state.get("draft", {}),
-            "proposed_actions": state.get("proposed_actions", [])
-            + (
-                [
-                    {
-                        "action_type": "retail_return",
-                        "description": "Return eligibility and refund proposal",
-                        "requires_review": True,
-                        "details": state["action_proposal"],
-                    }
-                ]
-                if state.get("action_proposal")
-                else []
-            ),
-            # Only the triage path carries background evidence; an enquiry escalated
-            # after drafting arrives with a draft that already cites its own sources.
-            "evidence": state.get("evidence", {}).get("citations", []),
-            "evidence_state": (
-                "selected" if state.get("evidence", {}).get("citations") else "unavailable"
-            ),
-            "routing_provenance": state.get("routing_snapshot"),
-            "delivery_recipient": state.get("client_id"),
-            "delivery_thread_id": state.get("thread_id"),
-            "delivery_subject": state.get("message", {}).get("subject") or "Re: your enquiry",
-            "verification": state.get("verification", {}),
-            "response_version": int(state.get("draft_version", 1)),
-        }
-        return {
-            "review_request": request,
-            "case_id": case_id,
-            "tool_calls": opened,
-            "draft": {
-                "text": PENDING_REVIEW_REPLY,
-                "citations": [],
-                "citation_markers": [],
-                "response_version": 1,
-                "source": "system",
-            },
-            "outcome": {"status": OutcomeStatus.PENDING_REVIEW.value, "review_id": review_id},
-            "events": [_event("human_review", "pending", started, review_id=review_id)],
-        }
-
-    def _ensure_case(state: SupportState) -> tuple[str | None, list[dict[str, Any]]]:
-        existing = state.get("case_id")
-        if existing or tools.case_tool is None:
-            return (str(existing) if existing else None), []
-        categories = state["triage"].get("review_categories") or []
-        record, call = tools.case_tool.open_case(
-            conversation_id=UUID(state["conversation_id"]),
-            client_id=state["client_id"],
-            category=str(categories[0]) if categories else "specialist_review",
-            summary=str(state["message"]["body"]),
-        )
-        return record.case_id, [call.as_event()]
-
-    def finalise_case(state: SupportState) -> dict[str, Any]:
-        """Close the case and deliver the reply through the channel's own tool."""
+    def finalise(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         message = str(state.get("draft", {}).get("text", "")) or UNSUPPORTED_REPLY
         status = OutcomeStatus(state.get("outcome", {}).get("status", OutcomeStatus.ANSWERED.value))
         calls: list[dict[str, Any]] = []
         case_id = state.get("case_id")
-        if tools.case_tool is not None and case_id:
-            calls.append(tools.case_tool.close_case(case_id, _case_status(status)).as_event())
-        if tools.mailbox_tool is not None and state.get("channel") == "simulated_email":
-            calls.append(
-                tools.mailbox_tool.deliver(
-                    thread_id=str(state["thread_id"]),
-                    recipient=str(state["client_id"]),
-                    subject=str(state["message"].get("subject") or "Re: your enquiry"),
-                    body=message,
-                ).as_event()
+
+        channel = state.get("channel", "chat")
+        
+        if channel == "simulated_email" and toolbox and toolbox.mailbox_tool:
+            subject = state.get("message", {}).get("subject") or "Your enquiry"
+            result = toolbox.mailbox_tool.deliver(
+                recipient=state.get("client_id", ""),
+                subject=subject,
+                body=message,
+                thread_id=state.get("thread_id") or "",
             )
+            calls.append({"tool": "simulated_mailbox", "result": result})
         return {
             "delivery": {
                 "message": message,
@@ -732,51 +407,52 @@ def build_graph(
             },
             "outcome": {**state.get("outcome", {}), "status": status.value, "case_id": case_id},
             "tool_calls": calls,
-            "events": [
-                _event(
-                    "finalise_case", status.value, started, case_id=case_id, delivered=bool(calls)
-                )
-            ],
+            "events": [_event("finalise", status.value, started, case_id=case_id)],
         }
 
-    def _case_status(status: OutcomeStatus) -> CaseStatus:
-        if status is OutcomeStatus.PENDING_REVIEW:
-            return CaseStatus.PENDING_REVIEW
-        if status is OutcomeStatus.UNABLE_TO_ANSWER:
-            return CaseStatus.HUMAN_OWNED
-        return CaseStatus.RESOLVED
-
     builder = StateGraph(SupportState)
-    for name, node in (
-        ("intake", intake),
-        ("triage", triage),
-        ("gather_evidence", gather_evidence),
-        ("plan_work", plan_work),
-        ("execute_task", execute_task),
-        ("case_tools", case_tools),
-        ("compose_reply", compose_reply),
-        ("verify_response", verify_response),
-        ("respond_directly", respond_directly),
-        ("human_review", human_review),
-        ("finalise_case", finalise_case),
-    ):
-        builder.add_node(name, node)
+    builder.add_node("intake", intake)
+    builder.add_node("load_conversation_memory", load_conversation_memory)
+    builder.add_node("classify_and_plan", classify_and_plan)
+
+    # Add agent nodes
+    def call_agent(agent_name, agent_graph):
+        def _call(state):
+            # In LangGraph, dispatching via Send maps to a state update.
+            # We must run the specialist graph and return its output.
+            res = agent_graph.invoke(state)
+            return {"specialist_results": res.get("specialist_results", {})}
+
+        return _call
+
+    builder.add_node("order_agent", call_agent("order_agent", order_agent))
+    builder.add_node("product_agent", call_agent("product_agent", product_agent))
+    builder.add_node("return_refund_agent", call_agent("return_refund_agent", return_refund_agent))
+    builder.add_node("rag_agent", call_agent("rag_agent", rag_agent))
+
+    builder.add_node("join_specialist_results", join_specialist_results)
+    builder.add_node("compose_reply", compose_reply)
+    builder.add_node("prepare_escalation", prepare_escalation)
+    builder.add_node("respond_directly", respond_directly)
+    builder.add_node("finalise", finalise)
+
     builder.add_edge(START, "intake")
-    builder.add_edge("intake", "triage")
+    builder.add_edge("intake", "load_conversation_memory")
+    builder.add_edge("load_conversation_memory", "classify_and_plan")
+
     builder.add_conditional_edges(
-        "triage", route_after_triage, ["plan_work", "gather_evidence", "respond_directly"]
+        "classify_and_plan", route_after_planning, ["order_agent", "product_agent", "return_refund_agent", "rag_agent", "respond_directly"]
     )
-    builder.add_edge("gather_evidence", "human_review")
-    builder.add_conditional_edges("plan_work", fan_out_tasks, ["execute_task", "compose_reply"])
-    builder.add_edge("execute_task", "case_tools")
-    builder.add_edge("case_tools", "compose_reply")
-    builder.add_edge("compose_reply", "verify_response")
-    builder.add_conditional_edges(
-        "verify_response",
-        route_after_verification,
-        ["finalise_case", "human_review", "respond_directly"],
-    )
-    builder.add_edge("respond_directly", "finalise_case")
-    builder.add_edge("human_review", "finalise_case")
-    builder.add_edge("finalise_case", END)
+
+    builder.add_edge("order_agent", "join_specialist_results")
+    builder.add_edge("product_agent", "join_specialist_results")
+    builder.add_edge("return_refund_agent", "join_specialist_results")
+    builder.add_edge("rag_agent", "join_specialist_results")
+
+    builder.add_edge("join_specialist_results", "compose_reply")
+    builder.add_edge("compose_reply", "prepare_escalation")
+    builder.add_edge("prepare_escalation", "finalise")
+    builder.add_edge("respond_directly", "finalise")
+    builder.add_edge("finalise", END)
+
     return builder.compile()
