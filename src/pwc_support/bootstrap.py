@@ -7,6 +7,11 @@ from typing import Any
 import ollama
 
 from pwc_support.adapters.simulated_mailbox import SimulatedMailbox
+from pwc_support.agents.classifier import OllamaIntentClassifier
+from pwc_support.agents.order import OllamaOrderPlanner, build_order_agent
+from pwc_support.agents.product import build_product_agent
+from pwc_support.agents.rag import build_rag_agent
+from pwc_support.agents.returns import build_return_refund_agent
 from pwc_support.config import Settings
 from pwc_support.llm.ollama import OllamaEmbedder, OllamaGenerator
 from pwc_support.rag.answer import RagAnswerer
@@ -22,13 +27,12 @@ from pwc_support.storage.repositories import (
 )
 from pwc_support.storage.retail_repositories import (
     OrderRepository,
-    ProductRepository,
     RefundRepository,
     ReturnRepository,
 )
 from pwc_support.workflow.graph import build_graph
 from pwc_support.workflow.retail_actions import RetailApprovalService
-from pwc_support.workflow.retail_tools import build_retail_tools
+from pwc_support.workflow.retail_tools import DefaultOrderToolbox
 from pwc_support.workflow.tools import CaseTool, MailboxTool, Toolbox
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
@@ -81,21 +85,31 @@ def build_runtime(
     cases = CaseRepository(database)
     reviews = ReviewRepository(database)
     mailbox = SimulatedMailbox(resolved.mailbox_path, database=database)
+    classifier = OllamaIntentClassifier(generator, settings=resolved)
+    order_agent = build_order_agent(
+        tools=DefaultOrderToolbox(OrderRepository(retail_database)),
+        planner=OllamaOrderPlanner(generator),
+        max_steps=resolved.max_planned_tasks,
+    )
+    product_agent = build_product_agent(tools=None, planner=None)
+    return_refund_agent = build_return_refund_agent(tools=None)
+    rag_answerer_instance = RagAnswerer(
+        knowledge_base,
+        generator,
+        minimum_similarity=resolved.minimum_similarity,
+        max_selected_hits=resolved.max_selected_hits,
+        max_evidence_chars=resolved.max_evidence_chars,
+        answer_tokens=resolved.answer_tokens,
+    )
+    rag_agent = build_rag_agent(rag_answerer=rag_answerer_instance)
+
     graph = build_graph(
-        retail_tools=build_retail_tools(
-            ProductRepository(retail_database),
-            OrderRepository(retail_database),
-            "CUS-1001",
-            ReturnRepository(retail_database, resolved.return_window_days),
-        ),
-        rag_answerer=RagAnswerer(
-            knowledge_base,
-            generator,
-            minimum_similarity=resolved.minimum_similarity,
-            max_selected_hits=resolved.max_selected_hits,
-            max_evidence_chars=resolved.max_evidence_chars,
-            answer_tokens=resolved.answer_tokens,
-        ),
+        classifier=classifier,
+        order_agent=order_agent,
+        product_agent=product_agent,
+        return_refund_agent=return_refund_agent,
+        rag_agent=rag_agent,
+        conversation_memory_repo=None,  # Loaded by ClientSupportService for now
         toolbox=Toolbox(case_tool=CaseTool(cases), mailbox_tool=MailboxTool(mailbox)),
         max_planned_tasks=resolved.max_planned_tasks,
     )
