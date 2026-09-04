@@ -6,10 +6,11 @@ from pathlib import Path
 import ollama
 
 from pwc_support.config import Settings
-from pwc_support.llm.ollama import OllamaContextualizer, OllamaEmbedder, OllamaGenerator
+from pwc_support.llm.ollama import OllamaGateway
 from pwc_support.rag.ingest import (
     ChunkingConfig,
     MetadataContextualizer,
+    ModelContextualizer,
     load_documents,
     load_manifest,
     prepare_chunks,
@@ -29,11 +30,22 @@ def main() -> None:
     args = parser.parse_args()
     settings = Settings.from_env().with_retrieval_config(Path("config/retrieval.json"))
     root = Path(__file__).parents[1] / "corpus"
-    ollama_client = ollama.Client(host=settings.ollama_base_url)
+    ollama_client = ollama.Client(
+        host=settings.ollama_base_url,
+        timeout=settings.request_timeout_seconds,
+    )
+    gateway = OllamaGateway(
+        ollama_client,
+        generation_model=settings.generation_model,
+        embedding_model=settings.embedding_model,
+        num_ctx=settings.num_ctx,
+        schema_tokens=settings.schema_tokens,
+        max_parallel_generations=settings.max_parallel_generations,
+    )
     store = ChromaKnowledgeBase(
         chroma_client(settings),
         settings.collection_name,
-        OllamaEmbedder(ollama_client, settings.embedding_model),
+        gateway,
         LexicalIndex(settings.lexical_db),
     )
     if args.delete_source:
@@ -44,8 +56,8 @@ def main() -> None:
     contextualizer = (
         MetadataContextualizer()
         if args.metadata_context_only
-        else OllamaContextualizer(
-            OllamaGenerator(ollama_client, settings.generation_model),
+        else ModelContextualizer(
+            gateway,
             max_document_chars=settings.context_document_max_chars,
         )
     )

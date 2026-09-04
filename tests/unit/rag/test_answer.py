@@ -1,26 +1,28 @@
-from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from pwc_support.domain.models import Citation, RagRequest, RetrievalBatch, RetrievalHit
 from pwc_support.rag.answer import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:
-    def retrieve(self, request: RagRequest, *, top_k: int = 6) -> RetrievalBatch:
-        return RetrievalBatch(
-            hits=(
-                RetrievalHit(
-                    source_id="source-1",
-                    chunk_id="chunk-1",
-                    title="Services",
-                    text="PwC provides consulting services.",
-                    heading="Services",
-                    similarity=0.8,
-                ),
-            )
+    def __init__(self, hits: tuple[RetrievalHit, ...] | None = None) -> None:
+        self.hits = hits if hits is not None else (
+            RetrievalHit(
+                source_id="shipping-and-orders",
+                chunk_id="shipping-and-orders-delivery-times-0",
+                title="Shipping and order support",
+                heading="Delivery times",
+                text="Standard delivery normally takes three to five business days.",
+                similarity=0.9,
+            ),
         )
+
+    def retrieve(self, request: RagRequest, *, top_k: int = 6) -> RetrievalBatch:
+        return RetrievalBatch(hits=self.hits)
 
 
 class FakeGenerator:
-    def __init__(self) -> None:
+    def __init__(self, reply: str = "Standard delivery takes three to five business days. [S1]") -> None:
         self.calls: list[str] = []
+        self.reply = reply
 
     def text(
         self,
@@ -28,35 +30,48 @@ class FakeGenerator:
         system: str,
         user: str,
         max_tokens: int = 512,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
     ) -> str:
         self.calls.append(user)
-        return "PwC provides consulting services. [S1]"
+        return self.reply
 
 
-def test_rag_answerer_returns_grounded_answer_and_citation() -> None:
-    result = RagAnswerer(FakeKnowledgeBase(), FakeGenerator()).answer(
-        RagRequest(question="What services are available?")
+def test_prepare_query_normalizes_whitespace_without_adding_domain_claims() -> None:
+    assert prepare_query("  How   long is shipping? ") == "How long is shipping?"
+
+
+def test_rag_answer_uses_selected_retail_evidence() -> None:
+    hit = RetrievalHit(
+        source_id="shipping-and-orders",
+        chunk_id="shipping-and-orders-delivery-times-0",
+        title="Shipping and order support",
+        heading="Delivery times",
+        text="Standard delivery normally takes three to five business days.",
+        similarity=0.9,
     )
+    answerer = RagAnswerer(
+        FakeKnowledgeBase(hits=(hit,)),
+        FakeGenerator("Standard delivery takes three to five business days. [S1]"),
+    )
+
+    result = answerer.answer(RagRequest(question="How long is shipping?"))
 
     assert result.status == "answered"
-    assert result.citations[0].marker == "[S1]"
-    assert result.citations[0].source_id == "source-1"
+    assert result.citations[0].source_id == "shipping-and-orders"
 
 
-def test_query_preparation_resolves_customer_support_pronouns() -> None:
-    assert prepare_query("What services do you provide?") == (
-        "What services do you provide? PwC business services"
+def test_rag_answer_without_a_valid_marker_is_withheld() -> None:
+    hit = RetrievalHit(
+        source_id="shipping-and-orders",
+        chunk_id="shipping-1",
+        title="Shipping and order support",
+        heading="Delivery times",
+        text="Standard delivery normally takes three to five business days.",
+        similarity=0.9,
     )
-    assert prepare_query("What services does PwC provide?") == "What services does PwC provide?"
+    answerer = RagAnswerer(FakeKnowledgeBase(hits=(hit,)), FakeGenerator("Three days."))
 
+    result = answerer.answer(RagRequest(question="How long is shipping?"))
 
-def test_gather_evidence_selects_sources_without_calling_the_model() -> None:
-    generator = FakeGenerator()
-    answerer = RagAnswerer(FakeKnowledgeBase(), generator)
-
-    bundle = answerer.gather_evidence(RagRequest(question="Was our report exposed?"))
-
-    assert [citation.source_id for citation in bundle.citations] == ["source-1"]
-    assert bundle.citations[0].marker == "[S1]"
-    assert generator.calls == []
+    assert result.status == "insufficient_evidence"
+    assert result.citations == ()

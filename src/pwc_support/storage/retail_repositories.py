@@ -7,6 +7,8 @@ from decimal import Decimal
 
 from pwc_support.domain.models import (
     CancellationExecutionResult,
+    CancellationPreview,
+    CancellationResult,
     OfferSummary,
     OrderInvestigation,
     OrderSummary,
@@ -16,6 +18,7 @@ from pwc_support.domain.models import (
     ReturnEligibility,
     ReturnRequest,
 )
+
 from pwc_support.storage.database import Database
 
 
@@ -190,32 +193,34 @@ class ProductRepository:
         )
 
 
+class CancellationConflict(ValueError):
+    pass
+
+
 class OrderRepository:
+
     def __init__(self, database: Database) -> None:
         self.database = database
 
     def lookup(self, order_id: str, customer_id: str) -> OrderSummary | None:
         with self.database.connect() as c:
             row = c.execute(
-                "SELECT * FROM orders WHERE order_id=? AND customer_id=?", (order_id, customer_id)
+                "SELECT order_id, customer_id, status, fulfilment_status, total, currency, version "
+                "FROM orders WHERE order_id=? AND customer_id=?",
+                (order_id, customer_id),
             ).fetchone()
             if not row:
                 return None
-            items = c.execute(
-                "SELECT item_id,product_id,quantity,unit_price FROM order_items WHERE order_id=?",
-                (order_id,),
-            ).fetchall()
         return OrderSummary(
             order_id=row["order_id"],
             customer_id=row["customer_id"],
             status=row["status"],
+            fulfilment_status=row["fulfilment_status"],
             total=Decimal(str(row["total"])),
             currency=row["currency"],
-            items=tuple(dict(item) for item in items),
-            delivered_at=datetime.fromisoformat(row["delivered_at"])
-            if row["delivered_at"]
-            else None,
+            version=int(row["version"]),
         )
+
 
     def investigate(self, order_id: str, customer_id: str) -> OrderInvestigation | None:
         """Verified order facts scoped to the caller's own customer id.
@@ -251,81 +256,77 @@ class OrderRepository:
         """That customer's own orders, most-recent-first and bounded by ``limit``."""
         with self.database.connect() as c:
             rows = c.execute(
-                "SELECT * FROM orders WHERE customer_id=? ORDER BY rowid DESC LIMIT ?",
+                "SELECT order_id, customer_id, status, fulfilment_status, total, currency, version "
+                "FROM orders WHERE customer_id=? ORDER BY rowid DESC LIMIT ?",
                 (customer_id, limit),
             ).fetchall()
-            summaries = []
-            for row in rows:
-                items = c.execute(
-                    "SELECT item_id,product_id,quantity,unit_price FROM order_items "
-                    "WHERE order_id=?",
-                    (row["order_id"],),
-                ).fetchall()
-                summaries.append(
-                    OrderSummary(
-                        order_id=row["order_id"],
-                        customer_id=row["customer_id"],
-                        status=row["status"],
-                        total=Decimal(str(row["total"])),
-                        currency=row["currency"],
-                        items=tuple(dict(item) for item in items),
-                        delivered_at=datetime.fromisoformat(row["delivered_at"])
-                        if row["delivered_at"]
-                        else None,
-                    )
+            return tuple(
+                OrderSummary(
+                    order_id=row["order_id"],
+                    customer_id=row["customer_id"],
+                    status=row["status"],
+                    fulfilment_status=row["fulfilment_status"],
+                    total=Decimal(str(row["total"])),
+                    currency=row["currency"],
+                    version=int(row["version"]),
                 )
-        return tuple(summaries)
+                for row in rows
+            )
 
-    def cancel(
-        self, order_id: str, customer_id: str, *, expected_version: int, review_id: str
-    ) -> CancellationExecutionResult:
-        """Optimistically cancel an order, idempotent on ``review_id``.
 
-        A replayed call with the same ``review_id`` reuses the recorded action
-        instead of re-checking the version, so approving the same reviewed
-        cancellation twice is safe even after the order's version has moved on.
-        """
-        with self.database.connect() as c:
-            existing = c.execute(
-                "SELECT * FROM order_cancellation_actions WHERE review_id=?", (review_id,)
+    def cancel(self, preview: CancellationPreview) -> CancellationResult:
+
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT order_id, customer_id, status FROM cancellation_actions "
+                "WHERE confirmation_token = ?",
+                (preview.confirmation_token,),
             ).fetchone()
             if existing:
-                return CancellationExecutionResult(
+                if (
+                    existing["order_id"] != preview.order_id
+                    or existing["customer_id"] != preview.customer_id
+                ):
+                    raise CancellationConflict("confirmation token belongs to another order")
+                return CancellationResult(
                     order_id=existing["order_id"],
-                    review_id=review_id,
-                    status=existing["status"],
+                    status="cancelled",
                     replayed=True,
                 )
+
             now = datetime.now(UTC).isoformat()
-            updated = c.execute(
+            updated = connection.execute(
                 "UPDATE orders SET status='cancelled', cancelled_at=?, version=version+1 "
-                "WHERE order_id=? AND customer_id=? AND version=?",
-                (now, order_id, customer_id, expected_version),
-            ).rowcount
-            if not updated:
-                raise ValueError("order not found or version conflict")
-            c.execute(
-                "INSERT INTO order_cancellation_actions ("
-                "review_id,idempotency_key,order_id,customer_id,status,created_at,completed_at) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (review_id, review_id, order_id, customer_id, "cancelled", now, now),
-            )
-            c.execute(
-                "INSERT INTO retail_audit_events "
-                "(event_type,entity_id,details_json,created_at) VALUES (?,?,?,?)",
+                "WHERE order_id=? AND customer_id=? AND version=? "
+                "AND status IN ('processing', 'paid') AND fulfilment_status='processing'",
                 (
-                    "order_cancelled",
-                    order_id,
-                    json.dumps({"review_id": review_id, "customer_id": customer_id}),
+                    now,
+                    preview.order_id,
+                    preview.customer_id,
+                    preview.expected_version,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise CancellationConflict("order changed before cancellation")
+
+            connection.execute(
+                "INSERT INTO cancellation_actions "
+                "(confirmation_token, order_id, customer_id, status, created_at, completed_at) "
+                "VALUES (?, ?, ?, 'cancelled', ?, ?)",
+                (
+                    preview.confirmation_token,
+                    preview.order_id,
+                    preview.customer_id,
+                    now,
                     now,
                 ),
             )
-        return CancellationExecutionResult(
-            order_id=order_id, review_id=review_id, status="cancelled", replayed=False
-        )
+        return CancellationResult(order_id=preview.order_id, status="cancelled", replayed=False)
 
 
 class ReturnRepository:
+
     def __init__(self, database: Database, window_days: int = 30) -> None:
         self.database, self.window_days = database, window_days
 

@@ -16,7 +16,8 @@ def test_real_manifest_loads_and_every_document_is_present() -> None:
 
     documents = load_documents(root, load_manifest(root / "manifest.json"))
 
-    assert len(documents) == 5
+    assert len(documents) == 3
+
     assert all(document.text for document in documents)
 
 
