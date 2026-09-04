@@ -84,6 +84,16 @@ def _extract_product_query(text: str) -> str:
         "items",
         "item",
         "search",
+        "on",
+        "about",
+        "tell",
+        "with",
+        "of",
+        "and",
+        "give",
+        "us",
+        "out",
+        "all",
     }
     words = [w for w in cleaned.split() if w.lower() not in stop_words]
     return " ".join(words).strip()

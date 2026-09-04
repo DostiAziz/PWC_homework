@@ -1,18 +1,14 @@
 services:
-  # One-shot bootstrap: builds the Chroma collection and BM25 index before the UI starts.
-  ingest:
+  setup:
     build: .
-    environment:
+    environment: &app_environment
       PWC_DATA_DIR: /app/data
-      # Native Ollama runs on the host, not in this network.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       CHROMA_MODE: http
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
-      # Overridable so the README's measured model swap works on the Docker path too.
       PWC_GENERATION_MODEL: ${PWC_GENERATION_MODEL:-gpt-oss:20b}
       PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-nomic-embed-text}
-      PWC_ANSWER_TOKENS: ${PWC_ANSWER_TOKENS:-512}
     volumes:
       - app-data:/app/data
     extra_hosts:
@@ -20,23 +16,17 @@ services:
     depends_on:
       chroma:
         condition: service_healthy
-    command: ["python", "scripts/ingest_corpus.py"]
+    command:
+      - /bin/sh
+      - -c
+      - python scripts/seed_retail_data.py && python scripts/ingest_corpus.py
     restart: "no"
 
   app:
     build: .
     ports:
       - "${PWC_APP_PORT:-8501}:8501"
-    environment:
-      PWC_DATA_DIR: /app/data
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-      CHROMA_MODE: http
-      CHROMA_HOST: chroma
-      CHROMA_PORT: "8000"
-      # Overridable so the README's measured model swap works on the Docker path too.
-      PWC_GENERATION_MODEL: ${PWC_GENERATION_MODEL:-gpt-oss:20b}
-      PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-nomic-embed-text}
-      PWC_ANSWER_TOKENS: ${PWC_ANSWER_TOKENS:-512}
+    environment: *app_environment
     volumes:
       - app-data:/app/data
     extra_hosts:
@@ -44,7 +34,7 @@ services:
     depends_on:
       chroma:
         condition: service_healthy
-      ingest:
+      setup:
         condition: service_completed_successfully
 
   chroma:
