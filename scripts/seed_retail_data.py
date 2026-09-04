@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from pwc_support.config import Settings
 from pwc_support.storage.database import Database
 
 
@@ -269,7 +270,7 @@ def seed(database: Database) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", type=Path, default=Path("data/state/retail.sqlite3"))
+    parser.add_argument("--db", type=Path, default=Settings.from_env().retail_db)
     args = parser.parse_args()
     database = Database(args.db)
     database.initialize()

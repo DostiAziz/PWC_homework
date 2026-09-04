@@ -1,16 +1,18 @@
 from pathlib import Path
 
 
-def test_client_surface_uses_one_chat_input() -> None:
+def test_ui_is_one_natural_language_chat() -> None:
     source = Path("app.py").read_text(encoding="utf-8")
-    assert "st.chat_input" in source
-    assert "render_retail_workspace" not in source
+
+    assert source.count("st.chat_input") == 1
+    assert "st.tabs" not in source
+    assert "Simulated email" not in source
+    assert "Human review" not in source
     assert "Order ID" not in source
-    assert "Item ID" not in source
-    assert "Reason" not in source
 
 
-def test_client_examples_are_natural_language() -> None:
+def test_ui_keeps_pending_cancellation_in_session() -> None:
     source = Path("app.py").read_text(encoding="utf-8")
-    assert "Can you tell me if my order has shipped?" in source
-    assert "What products are on offer?" in source
+
+    assert '"pending_cancellation"' in source
+    assert "reply.pending_cancellation" in source
