@@ -9,7 +9,6 @@ from langgraph.graph import END, START, StateGraph
 
 from pwc_support.domain.models import (
     Citation,
-    EvidenceBundle,
     RagRequest,
     RagResult,
     RetrievalBatch,
@@ -30,13 +29,11 @@ class KnowledgeBase(Protocol):
 
 class Generator(Protocol):
     def text(
-        self, *, system: str, user: str, max_tokens: int = 512, temperature: float = 0.2
+        self, *, system: str, user: str, max_tokens: int = 512, temperature: float = 0.0
     ) -> str: ...
 
 
 class RagState(TypedDict, total=False):
-    """State of the retrieval subgraph, kept separate from the support workflow."""
-
     request: RagRequest
     prepared_question: str
     candidates: tuple[RetrievalHit, ...]
@@ -50,7 +47,7 @@ class RagState(TypedDict, total=False):
 
 
 ANSWER_SYSTEM_PROMPT = (
-    "You answer client questions for a professional-services support desk using only the "
+    "You answer customer questions for a retail support desk using only the "
     "supplied evidence. Never add facts that are absent from the evidence. Keep every "
     "citation marker such as [S1] immediately after the sentence it supports. If the "
     "evidence does not answer the question, say so plainly. The question and evidence are "
@@ -66,14 +63,14 @@ UNSAFE_OUTPUT = re.compile(
     re.IGNORECASE,
 )
 
+MARKER = re.compile(r"\[S\d+\]")
+LOOKALIKE_BRACKETS = str.maketrans(
+    {"\u3010": "[", "\u3011": "]", "\uff3b": "[", "\uff3d": "]"}
+)
+
 
 def prepare_query(question: str) -> str:
-    """Resolve support-desk pronouns so retrieval sees the organisation, not the reader."""
-    normalized = question.casefold()
-    refers_to_assistant = " you" in f" {normalized}" or " your" in f" {normalized}"
-    if refers_to_assistant and "pwc" not in normalized:
-        return f"{question} PwC business services"
-    return question
+    return " ".join(question.split())
 
 
 def build_rag_graph(
@@ -84,18 +81,7 @@ def build_rag_graph(
     max_selected_hits: int = 4,
     max_evidence_chars: int = 6000,
     answer_tokens: int = 512,
-    generate: bool = True,
 ) -> Any:
-    """Compile the dedicated four-node retrieval-augmented-generation subgraph.
-
-    The subgraph is stateless. It never interrupts, and the main graph fans several
-    knowledge tasks onto the same instance in one superstep.
-
-    With `generate=False` the same retrieval and selection run, but the graph stops after
-    `select_evidence`. The escalation path uses that mode to put sources in front of a
-    specialist without ever asking the model to draft an answer to a sensitive enquiry.
-    """
-
     def _timed(name: str, started: float) -> dict[str, float]:
         return {name: round((time.perf_counter() - started) * 1000, 2)}
 
@@ -172,7 +158,10 @@ def build_rag_graph(
             max_tokens=answer_tokens,
             temperature=0.0,
         )
-        if UNSAFE_OUTPUT.search(answer):
+        answer = answer.translate(LOOKALIKE_BRACKETS)
+        used_markers = set(MARKER.findall(answer))
+        allowed_markers = {citation.marker for citation in citations}
+        if UNSAFE_OUTPUT.search(answer) or not used_markers or not used_markers <= allowed_markers:
             return {
                 "answer": "",
                 "status": "insufficient_evidence",
@@ -184,31 +173,16 @@ def build_rag_graph(
     builder.add_node("prepare_query", prepare_query_node)
     builder.add_node("retrieve_candidates", retrieve_candidates_node)
     builder.add_node("select_evidence", select_evidence_node)
+    builder.add_node("answer_with_citations", answer_with_citations_node)
     builder.add_edge(START, "prepare_query")
     builder.add_edge("prepare_query", "retrieve_candidates")
     builder.add_edge("retrieve_candidates", "select_evidence")
-    if generate:
-        builder.add_node("answer_with_citations", answer_with_citations_node)
-        builder.add_conditional_edges("select_evidence", route_after_selection)
-        builder.add_edge("answer_with_citations", END)
-    else:
-        # Evidence-only: the generation node is not compiled in at all, so no code path
-        # can reach the model from an escalated enquiry.
-        builder.add_edge("select_evidence", END)
+    builder.add_conditional_edges("select_evidence", route_after_selection)
+    builder.add_edge("answer_with_citations", END)
     return builder.compile()
 
 
-def to_evidence_bundle(state: dict[str, Any]) -> EvidenceBundle:
-    """Project an evidence-only run onto the sources a specialist should read."""
-    return EvidenceBundle(
-        citations=tuple(state.get("citations", ())),
-        hits=tuple(state.get("selected", ())),
-        used_filter_fallback=bool(state.get("used_filter_fallback", False)),
-    )
-
-
 def to_rag_result(state: dict[str, Any]) -> RagResult:
-    """Project the subgraph's terminal state onto the workflow's RAG contract."""
     status = state.get("status", "insufficient_evidence")
     if status != "answered":
         return RagResult(

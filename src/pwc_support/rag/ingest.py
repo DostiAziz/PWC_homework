@@ -72,6 +72,35 @@ class MetadataContextualizer:
         )
 
 
+class TextGenerator(Protocol):
+    def text(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_tokens: int = 512,
+        temperature: float = 0.0,
+    ) -> str: ...
+
+
+class ModelContextualizer:
+    def __init__(self, generator: TextGenerator, max_document_chars: int = 24000) -> None:
+        self.generator = generator
+        self.max_document_chars = max_document_chars
+
+    def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str:
+        return self.generator.text(
+            system="Write a short retrieval context using only the supplied retail document.",
+            user=(
+                f"<document>{document.text[:self.max_document_chars]}</document>"
+                f"<heading>{heading}</heading><chunk>{chunk}</chunk>"
+            ),
+            max_tokens=100,
+            temperature=0.0,
+        )
+
+
+
 class ManifestError(ValueError):
     """The corpus manifest is not a usable description of the knowledge base."""
 
