@@ -19,6 +19,16 @@ class FakeStructuredModel:
         return schema.model_validate(self.payload)
 
 
+class MalformedStructuredModel:
+    def structured(self, **_: Any) -> None:
+        return None
+
+
+class UnavailableStructuredModel:
+    def structured(self, **_: Any) -> None:
+        raise ConnectionError("Ollama is unavailable")
+
+
 def test_planner_decomposes_compound_request_once_per_kind() -> None:
     model = FakeStructuredModel(
         {
@@ -59,6 +69,16 @@ def test_planner_rejects_duplicate_task_kinds() -> None:
 
     with pytest.raises(PlanningUnavailable, match="one task per kind"):
         OllamaPlanner(model).plan("Tell me about shipping and warranty")
+
+
+def test_planner_normalizes_malformed_gateway_output() -> None:
+    with pytest.raises(PlanningUnavailable, match="invalid task plan"):
+        OllamaPlanner(MalformedStructuredModel()).plan("Show offers")
+
+
+def test_planner_normalizes_unavailable_gateway() -> None:
+    with pytest.raises(PlanningUnavailable, match="planner is unavailable"):
+        OllamaPlanner(UnavailableStructuredModel()).plan("Show offers")
 
 
 def test_greeting_and_confirmation_are_deterministic() -> None:

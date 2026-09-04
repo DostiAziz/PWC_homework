@@ -63,6 +63,8 @@ class OllamaPlanner:
                 schema=_Plan,
                 temperature=0.0,
             )
+            if not isinstance(output, _Plan):
+                raise TypeError("planner returned an unexpected output type")
             kinds = [draft.kind for draft in output.tasks]
             if len(kinds) != len(set(kinds)):
                 raise PlanningUnavailable("planner must return one task per kind")
@@ -74,8 +76,10 @@ class OllamaPlanner:
             )
         except PlanningUnavailable:
             raise
-        except (ValidationError, TypeError, ValueError, RuntimeError) as error:
+        except (ValidationError, TypeError, ValueError) as error:
             raise PlanningUnavailable("planner returned an invalid task plan") from error
+        except Exception as error:
+            raise PlanningUnavailable("planner is unavailable") from error
 
 
 def is_greeting(message: str) -> bool:
