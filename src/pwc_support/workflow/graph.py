@@ -52,7 +52,7 @@ def build_graph(
     planner: Planner,
     commerce: Commerce,
     rag_answerer: Rag,
-) -> CompiledStateGraph:
+) -> CompiledStateGraph[Any, Any, Any, Any]:
     def intake(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         message = " ".join(state.get("message", "").split())
@@ -139,7 +139,7 @@ def build_graph(
                 ),
                 citations=rag.citations,
             )
-            event_type = rag.status
+            event_type: str = rag.status
         except OllamaUnavailable:
             result = TaskResult(
                 task_id=task.task_id,
@@ -216,9 +216,7 @@ def build_graph(
     def respond(state: SupportState) -> dict[str, Any]:
         started = time.perf_counter()
         results = state.get("ordered_results", ())
-        response = state.get("direct_response") or "\n\n".join(
-            result.message for result in results
-        )
+        response = state.get("direct_response") or "\n\n".join(result.message for result in results)
         citations = tuple(citation for result in results for citation in result.citations)
         pending = state.get("pending_cancellation")
         if any(result.clear_pending for result in results):

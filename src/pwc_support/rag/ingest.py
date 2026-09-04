@@ -92,13 +92,12 @@ class ModelContextualizer:
         return self.generator.text(
             system="Write a short retrieval context using only the supplied retail document.",
             user=(
-                f"<document>{document.text[:self.max_document_chars]}</document>"
+                f"<document>{document.text[: self.max_document_chars]}</document>"
                 f"<heading>{heading}</heading><chunk>{chunk}</chunk>"
             ),
             max_tokens=100,
             temperature=0.0,
         )
-
 
 
 class ManifestError(ValueError):

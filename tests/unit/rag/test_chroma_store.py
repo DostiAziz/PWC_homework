@@ -45,4 +45,3 @@ def test_sync_removes_stale_chunks_and_source_delete_is_explicit() -> None:
 
     assert report.deleted > 0
     assert store.delete_source("shipping-and-orders") > 0
-

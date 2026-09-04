@@ -27,9 +27,7 @@ def render_citations(citations: tuple[Citation, ...]) -> None:
 
 
 def render_trace(reply: ChatReply) -> None:
-    with st.expander(
-        f"Trace: {len(reply.events)} events, {reply.total_duration_ms:.0f} ms"
-    ):
+    with st.expander(f"Trace: {len(reply.events)} events, {reply.total_duration_ms:.0f} ms"):
         if reply.tasks:
             st.caption("Tasks: " + ", ".join(task.kind.value for task in reply.tasks))
         st.dataframe(
@@ -53,15 +51,16 @@ def initialise_session() -> None:
 st.title("Retail customer support")
 st.caption("Local agentic RAG prototype using Ollama, LangGraph, Chroma, and SQLite")
 st.markdown(
-    "Try: `What jackets are on offer?`, `Where is ORD-5001?`, "
-    "or `How long is standard shipping?`"
+    "Try: `What jackets are on offer?`, `Where is ORD-5001?`, or `How long is standard shipping?`"
 )
 initialise_session()
 
 try:
     runtime = get_runtime()
 except Exception as error:
-    st.error("The local runtime is unavailable. Start Ollama, seed retail data, and ingest the corpus.")
+    st.error(
+        "The local runtime is unavailable. Start Ollama, seed retail data, and ingest the corpus."
+    )
     st.code(str(error))
     st.stop()
 

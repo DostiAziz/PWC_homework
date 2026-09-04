@@ -13,7 +13,6 @@ from pwc_support.domain.models import (
 )
 from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
 
-
 Confirmation = Literal["yes", "no", "unclear"] | None
 
 
@@ -44,17 +43,23 @@ class CommerceTools:
     def catalogue(self, task: Task) -> TaskResult:
         if task.catalogue_action is CatalogueAction.OFFERS:
             offers = self.products.list_active_offers(query=task.product_query)
-            message = "\n".join(
-                f"{offer.name} ({offer.product_id}): {offer.effective_price} "
-                f"{offer.currency}, {offer.description}"
-                for offer in offers
-            ) or "No active offers matched your request."
+            message = (
+                "\n".join(
+                    f"{offer.name} ({offer.product_id}): {offer.effective_price} "
+                    f"{offer.currency}, {offer.description}"
+                    for offer in offers
+                )
+                or "No active offers matched your request."
+            )
         else:
             products = self.products.search(task.product_query or task.request)
-            message = "\n".join(
-                f"{product.name}: {product.price} {product.currency}, {product.stock} in stock"
-                for product in products
-            ) or "No available products matched your request."
+            message = (
+                "\n".join(
+                    f"{product.name}: {product.price} {product.currency}, {product.stock} in stock"
+                    for product in products
+                )
+                or "No available products matched your request."
+            )
         return TaskResult(task_id=task.task_id, kind=task.kind, message=message)
 
     def _cancel(
@@ -121,7 +126,10 @@ class CommerceTools:
         return TaskResult(
             task_id=task.task_id,
             kind=task.kind,
-            message=f"Cancel order {order.order_id} for {order.total} {order.currency}? Please answer yes or no.",
+            message=(
+                f"Cancel order {order.order_id} for {order.total} {order.currency}? "
+                "Please answer yes or no."
+            ),
             pending_cancellation=preview,
         )
 

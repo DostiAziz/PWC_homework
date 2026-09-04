@@ -1,4 +1,4 @@
-"""Load-test the full support workflow: real retrieval, generation, persistence, delivery."""
+"""Load-test the full support workflow: real retrieval, generation, persistence."""
 
 from __future__ import annotations
 
@@ -14,14 +14,13 @@ from typing import Any
 
 from pwc_support.bootstrap import build_runtime
 from pwc_support.config import Settings
-from pwc_support.services.client_support import ClientSupportService
+from pwc_support.services.chat import ChatService
 
 
 @dataclass(frozen=True, slots=True)
 class RequestSample:
     index: int
     question_id: str
-    status: str
     latency_ms: float
     node_ms: dict[str, float]
     error: str | None = None
@@ -37,7 +36,7 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def run_phase(
-    service: ClientSupportService,
+    service: ChatService,
     workload: list[dict[str, Any]],
     *,
     requests: int,
@@ -47,31 +46,30 @@ def run_phase(
         case = workload[index % len(workload)]
         started = time.perf_counter()
         try:
-            run = service.submit(
+            reply = service.submit(
                 body=str(case["question"]),
-                client_id=f"load-client-{index}",
+                customer_id=str(case["customer_id"]),
             )
         except Exception as error:
             return RequestSample(
                 index=index,
                 question_id=str(case["id"]),
-                status="error",
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
                 node_ms={},
                 error=f"{type(error).__name__}: {error}",
             )
         node_ms: dict[str, float] = defaultdict(float)
-        for event in run.events:
-            node_ms[str(event["node"])] += float(event.get("duration_ms") or 0.0)
-            for key, value in event.get("details", {}).items():
-                if str(key).startswith("rag."):
-                    node_ms[str(key)] += float(value)
+        for event in reply.events:
+            node_ms[event.node] += event.duration_ms or 0.0
+        failed = any(
+            event.node == "service" and event.event_type == "failed" for event in reply.events
+        )
         return RequestSample(
             index=index,
             question_id=str(case["id"]),
-            status=run.outcome.status.value,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
             node_ms=dict(node_ms),
+            error=reply.message if failed else None,
         )
 
     started = time.perf_counter()
@@ -93,16 +91,9 @@ def run_phase(
         }
         for node, values in node_totals.items()
     }
-    # The rag.* stages are nested inside execute_task, so exclude them from the share base.
-    measured_total = (
-        sum(item["total_ms"] for node, item in node_profile.items() if not node.startswith("rag."))
-        or 1.0
-    )
+    measured_total = sum(item["total_ms"] for item in node_profile.values()) or 1.0
     for item in node_profile.values():
         item["share_of_measured_ms"] = round(item["total_ms"] / measured_total, 4)
-    statuses: dict[str, int] = defaultdict(int)
-    for sample in samples:
-        statuses[sample.status] += 1
 
     return {
         "requests": requests,
@@ -110,7 +101,6 @@ def run_phase(
         "elapsed_seconds": round(elapsed, 2),
         "throughput_per_second": round(requests / elapsed, 3) if elapsed else 0.0,
         "failures": sum(1 for sample in samples if sample.error is not None),
-        "statuses": dict(statuses),
         "latency_ms": {
             "min": round(min(latencies), 2) if latencies else 0.0,
             "mean": round(statistics.fmean(latencies), 2) if latencies else 0.0,
@@ -125,48 +115,32 @@ def run_phase(
 
 
 def summarise(phases: list[dict[str, Any]]) -> dict[str, Any]:
-    """Name the measured bottleneck rather than asserting one from architecture alone."""
     baseline, scaled = phases[0], phases[-1]
-    hottest: tuple[str, dict[str, Any]] = max(
-        (
-            (node, item)
-            for node, item in baseline["node_profile"].items()
-            if not node.startswith("rag.")
-        ),
+    bottleneck_node, hottest = max(
+        baseline["node_profile"].items(),
         key=lambda item: item[1]["total_ms"],
-        default=("", {}),
+        default=("none", {"share_of_measured_ms": 0.0}),
     )
-    stages = {
-        node: item["total_ms"]
-        for node, item in baseline["node_profile"].items()
-        if node.startswith("rag.")
-    }
-    stage_total = sum(stages.values()) or 1.0
-    p95_growth = (
-        scaled["latency_ms"]["p95"] / baseline["latency_ms"]["p95"]
-        if baseline["latency_ms"]["p95"]
-        else 0.0
-    )
-    throughput_gain = (
-        scaled["throughput_per_second"] / baseline["throughput_per_second"]
-        if baseline["throughput_per_second"]
-        else 0.0
-    )
+    baseline_p95 = baseline["latency_ms"]["p95"]
+    baseline_rate = baseline["throughput_per_second"]
+    p95_growth = scaled["latency_ms"]["p95"] / baseline_p95 if baseline_p95 else 0.0
+    throughput_gain = scaled["throughput_per_second"] / baseline_rate if baseline_rate else 0.0
+    recommendations = [
+        (
+            "Benchmark a smaller generation model against the frozen evaluation before adoption; "
+            f"the measured hot node is {bottleneck_node}."
+        ),
+        (
+            "Keep one generation slot when added concurrency raises p95 much more than throughput; "
+            "otherwise re-run with the measured best concurrency."
+        ),
+    ]
     return {
-        "bottleneck_node": hottest[0],
-        "bottleneck_stage_breakdown": {
-            node: round(value / stage_total, 4)
-            for node, value in sorted(stages.items(), key=lambda item: -item[1])
-        },
-        "bottleneck_share_of_measured_time": hottest[1].get("share_of_measured_ms", 0.0),
+        "bottleneck_node": bottleneck_node,
+        "bottleneck_share_of_measured_time": hottest["share_of_measured_ms"],
         "p95_growth_at_higher_concurrency": round(p95_growth, 2),
         "throughput_gain_at_higher_concurrency": round(throughput_gain, 2),
-        "interpretation": (
-            "Doubling concurrency multiplied p95 latency by "
-            f"{p95_growth:.2f} while throughput changed by only "
-            f"{throughput_gain:.2f}x, which is the signature of a single serialised "
-            "resource rather than of client-side overhead."
-        ),
+        "recommendations": recommendations,
     }
 
 
@@ -185,12 +159,7 @@ def main() -> None:
         json.loads(line) for line in args.workload.read_text(encoding="utf-8").splitlines() if line
     ]
     runtime = build_runtime()
-    service = ClientSupportService(
-        runtime.graph,
-        reviews=runtime.reviews,
-        database=runtime.database,
-        mailbox=runtime.mailbox,
-    )
+    service = runtime.service
     phases = []
     for concurrency in args.concurrency:
         print(f"Running {args.requests} requests at concurrency {concurrency}…")

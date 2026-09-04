@@ -1,8 +1,6 @@
 import sqlite3
 from dataclasses import dataclass, field
 
-import pytest
-
 from pwc_support.domain.models import (
     CatalogueAction,
     Citation,
@@ -139,9 +137,7 @@ def test_compound_request_fans_out_and_joins_in_task_order() -> None:
 
     assert [item.task_id for item in result["ordered_results"]] == ["task-1", "task-2"]
     assert result["response"].index("Standard delivery") < result["response"].index("Trail Shell")
-    assert [citation.source_id for citation in result["citations"]] == [
-        "shipping-and-orders"
-    ]
+    assert [citation.source_id for citation in result["citations"]] == ["shipping-and-orders"]
 
 
 def test_blank_input_returns_direct_clarification() -> None:
@@ -164,7 +160,9 @@ def test_planner_failure_returns_safe_message() -> None:
 
     result = graph.invoke({"message": "Something complex", "customer_id": "CUS-1001"})
 
-    assert result["response"] == "The local model could not classify that request. Please try again."
+    assert (
+        result["response"] == "The local model could not classify that request. Please try again."
+    )
     assert result["tasks"] == ()
 
 
@@ -235,11 +233,11 @@ def test_cancellation_requires_a_second_confirming_turn(retail_db: Database) -> 
         rag_answerer=FakeRag(),
     )
 
-    preview = graph.invoke(
-        {"message": "Cancel ORD-2001", "customer_id": "CUS-1001"}
-    )
+    preview = graph.invoke({"message": "Cancel ORD-2001", "customer_id": "CUS-1001"})
     assert preview["pending_cancellation"] is not None
-    assert OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001").status == "processing"
+    order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
+    assert order is not None
+    assert order.status == "processing"
 
     confirmed = graph.invoke(
         {

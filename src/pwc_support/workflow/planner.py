@@ -21,7 +21,10 @@ Return only the requested schema."""
 
 GREETING = re.compile(r"^(hi|hello|hey|good (morning|afternoon|evening))[!. ]*$", re.I)
 YES = re.compile(r"^(yes|y|confirm|yes,? cancel it|cancel it)[!. ]*$", re.I)
-NO = re.compile(r"^(no|n|stop|do not cancel|don't cancel)[!. ]*$", re.I)
+NO = re.compile(
+    r"^(no|n|stop|no,?\s*(do not cancel|don't cancel)|do not cancel|don't cancel)[!. ]*$",
+    re.I,
+)
 
 
 class PlanningUnavailable(RuntimeError):
@@ -69,9 +72,7 @@ class OllamaPlanner:
             if len(kinds) != len(set(kinds)):
                 raise PlanningUnavailable("planner must return one task per kind")
             return tuple(
-                Task.model_validate(
-                    {"task_id": f"task-{index}", **draft.model_dump()}
-                )
+                Task.model_validate({"task_id": f"task-{index}", **draft.model_dump()})
                 for index, draft in enumerate(output.tasks, start=1)
             )
         except PlanningUnavailable:

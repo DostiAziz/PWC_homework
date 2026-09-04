@@ -8,9 +8,7 @@ class FakeGraph:
     def invoke(self, state: dict[str, Any]) -> dict[str, Any]:
         return {
             **state,
-            "tasks": (
-                Task(task_id="task-1", kind=TaskKind.KNOWLEDGE, request=state["message"]),
-            ),
+            "tasks": (Task(task_id="task-1", kind=TaskKind.KNOWLEDGE, request=state["message"]),),
             "response": "Grounded answer. [S1]",
             "citations": (),
             "events": (TraceEvent(node="respond", event_type="completed", duration_ms=1.0),),

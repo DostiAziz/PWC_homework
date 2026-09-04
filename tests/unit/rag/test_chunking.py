@@ -45,8 +45,6 @@ def test_chunking_is_bounded_overlapping_and_deterministic() -> None:
     assert all(chunk.heading for chunk in first)
 
 
-
-
 def test_chunk_context_is_prepended_for_embedding_but_original_is_preserved() -> None:
     root = Path(__file__).parents[3] / "corpus"
     document = load_documents(root, load_manifest(root / "manifest.json"))[0]
@@ -55,4 +53,3 @@ def test_chunk_context_is_prepended_for_embedding_but_original_is_preserved() ->
 
     assert chunk.context.startswith("Context for shipping-and-orders")
     assert chunk.embedding_text == f"{chunk.context}\n\n{chunk.original_text}"
-
