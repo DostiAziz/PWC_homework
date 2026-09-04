@@ -71,6 +71,9 @@ class ReviewDecisionKind(StrEnum):
     APPROVE_REFUND = "approve_refund"
     REJECT_REFUND = "reject_refund"
     APPROVE_RETURN = "approve_return"
+    REJECT_RETURN = "reject_return"
+    APPROVE_CANCELLATION = "approve_cancellation"
+    REJECT_CANCELLATION = "reject_cancellation"
     REQUEST_INFORMATION = "request_information"
     OFFER_REPLACEMENT = "offer_replacement"
 
@@ -318,6 +321,7 @@ class ProposedAction(DomainModel):
         "deliver_email",
         "retail_return",
         "retail_refund",
+        "retail_cancellation",
         "offer_replacement",
     ]
     description: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
@@ -420,3 +424,218 @@ class OperationalEvent(DomainModel):
     duration_ms: float | None = Field(default=None, ge=0)
     details: dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# --- Agentic specialist routing contracts -----------------------------------
+#
+# These typed contracts are the shared vocabulary between the intent classifier,
+# the specialist subgraphs (OrderAgent, ProductAgent, ReturnRefundAgent, RagAgent),
+# and the supervisor workflow that dispatches tasks and joins their results. They
+# intentionally live alongside the other domain models rather than under
+# `agents/`, so storage-layer repositories can return them without importing
+# from the agents package. `pwc_support.agents.contracts` re-exports them.
+
+
+class SupportIntent(StrEnum):
+    PRODUCT_SEARCH = "product_search"
+    PRODUCT_RECOMMENDATION = "product_recommendation"
+    ORDER_STATUS = "order_status"
+    ORDER_CANCELLATION = "order_cancellation"
+    RETURN_REQUEST = "return_request"
+    REFUND_REQUEST = "refund_request"
+    KNOWLEDGE_QUERY = "knowledge_query"
+
+
+class SpecialistName(StrEnum):
+    ORDER = "order"
+    PRODUCT = "product"
+    RETURN_REFUND = "return_refund"
+    RAG = "rag"
+
+
+class SpecialistStatus(StrEnum):
+    """Terminal/clarification vocabulary shared by every specialist subgraph.
+
+    `ORDER_NOT_FOUND` is order-specific: OrderAgent keeps its existing not-found
+    status while sharing every other value with ReturnRefundAgent.
+    """
+
+    NEEDS_INFORMATION = "needs_information"
+    CORRECTION_REQUESTED = "correction_requested"
+    REVIEW_REQUIRED = "review_required"
+    COMPLETED = "completed"
+    UNSUPPORTED = "unsupported"
+    TOOL_UNAVAILABLE = "tool_unavailable"
+    FAILED = "failed"
+    ORDER_NOT_FOUND = "order_not_found"
+
+
+class PolicyFinding(DomainModel):
+    rule_id: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    passed: bool
+    message: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
+class OrderInvestigation(DomainModel):
+    """Customer-scoped, verified order facts collected before any policy decision."""
+
+    order_id: str
+    customer_id: str
+    status: str
+    total: Decimal = Field(ge=0)
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    payment_status: str
+    fulfilment_status: str
+    shipped_at: datetime | None = None
+    version: int = Field(ge=1)
+    items: tuple[dict[str, Any], ...] = ()
+
+
+class ReturnInvestigation(DomainModel):
+    """Customer-scoped, verified order-and-item facts for a return or refund request."""
+
+    order_id: str
+    customer_id: str
+    item_id: str
+    order_status: str
+    item_description: str
+    quantity: int = Field(ge=1)
+    unit_price: Decimal = Field(ge=0)
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+    delivered_at: datetime | None = None
+    return_window_expires_at: datetime | None = None
+    eligible: bool
+    risk_flags: tuple[RetailActionRisk, ...] = ()
+    version: int = Field(ge=1)
+
+
+class CancellationReviewPacket(DomainModel):
+    """Side-effect-free reviewer handoff for an order cancellation request."""
+
+    conversation_id: UUID
+    client_id: str
+    original_request: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+    order: OrderInvestigation
+    policy_findings: tuple[PolicyFinding, ...] = ()
+    missing_information: tuple[str, ...] = ()
+    recommended_action: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class ReturnReviewPacket(DomainModel):
+    """Side-effect-free reviewer handoff for a return request."""
+
+    conversation_id: UUID
+    client_id: str
+    original_request: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+    investigation: ReturnInvestigation
+    policy_findings: tuple[PolicyFinding, ...] = ()
+    missing_information: tuple[str, ...] = ()
+    recommended_action: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class RefundReviewPacket(DomainModel):
+    """Side-effect-free reviewer handoff for a refund request."""
+
+    conversation_id: UUID
+    client_id: str
+    original_request: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+    investigation: ReturnInvestigation
+    refund_amount: Decimal = Field(ge=0)
+    policy_findings: tuple[PolicyFinding, ...] = ()
+    missing_information: tuple[str, ...] = ()
+    recommended_action: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class CancellationExecutionResult(DomainModel):
+    """Result of applying an approved cancellation, distinguishing replayed approvals."""
+
+    order_id: str
+    review_id: str
+    status: str
+    replayed: bool = False
+
+
+class OfferSummary(DomainModel):
+    """A database-computed active offer, priced in code rather than by a model."""
+
+    product_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    offer_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    list_price: Decimal = Field(ge=0)
+    discount_percent: Decimal = Field(ge=0, le=100)
+    effective_price: Decimal = Field(ge=0)
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "EUR"
+
+
+class ProductRecommendation(DomainModel):
+    """A single catalogue match with a database-derived reason, not an invented one."""
+
+    product: ProductSummary
+    match_reason: Annotated[str, StringConstraints(min_length=1, max_length=300)]
+    rank: int = Field(ge=1)
+
+
+class RoutingTask(DomainModel):
+    """One planner-identified task, routed to exactly one specialist."""
+
+    task_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    intent: SupportIntent
+    specialist: SpecialistName
+    user_text: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+    entities: dict[str, str] = Field(default_factory=dict)
+    depends_on: tuple[str, ...] = ()
+
+    @field_validator("entities")
+    @classmethod
+    def bound_entities(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 20:
+            raise ValueError("entities cannot contain more than 20 keys")
+        for key, entity_value in value.items():
+            if not (1 <= len(key) <= 100):
+                raise ValueError("entity keys must be 1-100 characters")
+            if len(entity_value) > 500:
+                raise ValueError("entity values cannot exceed 500 characters")
+        return value
+
+
+class RoutingDecision(DomainModel):
+    """The classifier's task plan, or a decision-level clarification/unsupported outcome."""
+
+    tasks: tuple[RoutingTask, ...] = Field(default_factory=tuple, max_length=8)
+    active_task_id: str | None = None
+    clarification_required: bool = False
+    clarification_reason: str | None = None
+    unsupported: bool = False
+    classifier_model: str = ""
+    classifier_prompt_version: str = ""
+
+
+class SpecialistResult(DomainModel):
+    """The typed value every specialist subgraph returns to the supervisor."""
+
+    specialist: SpecialistName
+    task_id: str
+    status: SpecialistStatus
+    customer_message: str | None = None
+    facts: dict[str, Any] = Field(default_factory=dict)
+    citations: tuple[Citation, ...] = ()
+    review_packet: CancellationReviewPacket | ReturnReviewPacket | RefundReviewPacket | None = None
+    missing_information: tuple[str, ...] = ()
+    events: tuple[dict[str, Any], ...] = ()
+
+
+class ConversationMemory(DomainModel):
+    """Durable, per-conversation specialist state used to resume clarification loops."""
+
+    conversation_id: UUID
+    client_id: str
+    active_specialist: SpecialistName | None = None
+    active_task_id: str | None = None
+    state_json: dict[str, Any] = Field(default_factory=dict)
+    version: int = Field(ge=0)
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def require_active_task_with_specialist(self) -> ConversationMemory:
+        if self.active_specialist is not None and self.active_task_id is None:
+            raise ValueError("active_specialist requires an active_task_id")
+        return self

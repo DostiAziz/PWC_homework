@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pwc_support.domain.models import TaskResult
+from pwc_support.domain.models import SpecialistResult, TaskResult
 
 
 def merge_task_results(
@@ -14,6 +14,20 @@ def merge_task_results(
         existing = merged.get(task_id)
         if existing is not None and existing != result:
             raise ValueError(f"conflicting task result: {task_id}")
+        merged[task_id] = result
+    return merged
+
+
+def merge_specialist_results(
+    left: dict[str, SpecialistResult] | None,
+    right: dict[str, SpecialistResult] | None,
+) -> dict[str, SpecialistResult]:
+    """Collect one specialist result per routed task, rejecting conflicting replays."""
+    merged = dict(left or {})
+    for task_id, result in (right or {}).items():
+        existing = merged.get(task_id)
+        if existing is not None and existing != result:
+            raise ValueError(f"conflicting specialist result: {task_id}")
         merged[task_id] = result
     return merged
 

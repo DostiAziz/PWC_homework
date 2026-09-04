@@ -10,10 +10,12 @@ from pwc_support.config import Settings
 from pwc_support.domain.models import (
     OrderSummary,
     ProductSummary,
+    ProposedAction,
     RetailActionRisk,
     RetailIntent,
     ReturnEligibility,
     ReturnRequest,
+    ReviewDecisionKind,
 )
 from pwc_support.domain.state import SupportState
 
@@ -142,3 +144,34 @@ def test_support_state_declares_retail_workflow_slices() -> None:
     annotations = SupportState.__annotations__
 
     assert {"retail_intent", "retail_answer", "action_proposal"} <= set(annotations)
+
+
+def test_support_state_declares_specialist_routing_slices() -> None:
+    annotations = SupportState.__annotations__
+
+    assert {
+        "routing_decision",
+        "routing_tasks",
+        "active_specialist",
+        "conversation_memory",
+        "specialist_results",
+        "joined_response_parts",
+    } <= set(annotations)
+
+
+def test_review_decision_kind_covers_cancellation_and_return_outcomes() -> None:
+    assert ReviewDecisionKind.APPROVE_CANCELLATION == "approve_cancellation"
+    assert ReviewDecisionKind.REJECT_CANCELLATION == "reject_cancellation"
+    assert ReviewDecisionKind.APPROVE_RETURN == "approve_return"
+    assert ReviewDecisionKind.REJECT_RETURN == "reject_return"
+    assert ReviewDecisionKind.APPROVE_REFUND == "approve_refund"
+    assert ReviewDecisionKind.REJECT_REFUND == "reject_refund"
+
+
+def test_proposed_action_accepts_retail_cancellation() -> None:
+    action = ProposedAction(
+        action_type="retail_cancellation",
+        description="Cancel order ORD-1001 pending review",
+    )
+
+    assert action.action_type == "retail_cancellation"
