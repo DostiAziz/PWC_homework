@@ -10,7 +10,6 @@ from uuid import UUID, uuid4
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from pwc_support.domain.errors import RiskClassificationUnavailable
 from pwc_support.domain.models import (
     CaseStatus,
     Citation,
@@ -29,7 +28,7 @@ from pwc_support.domain.models import (
 from pwc_support.domain.state import SupportState
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.subgraph import to_rag_result
-from pwc_support.workflow.policy import ReviewPolicy, merge_routing
+from pwc_support.workflow.policy import ReviewPolicy
 from pwc_support.workflow.tools import Toolbox, find_case_reference
 
 MARKER = re.compile(r"\[S\d+\]")
@@ -116,7 +115,6 @@ def renumber_citations(
 def build_graph(
     *,
     policy: ReviewPolicy | None = None,
-    risk_classifier: Any = None,
     rag_answerer: RagAnswerer | None = None,
     toolbox: Toolbox | None = None,
     retail_tools: list[Any] | None = None,
@@ -164,29 +162,11 @@ def build_graph(
         retail_action = any(word in body.casefold() for word in ("return", "refund", "send back"))
         if retail_lookup and not retail_action and not decision.requires_review:
             route = Route.PLAN
-        semantic = None
-        failure_class = None
-        if not decision.requires_review and route is Route.PLAN and risk_classifier is not None:
-            try:
-                semantic = risk_classifier.classify(enquiry=body)
-                requires_review, merged_categories = merge_routing(
-                    deterministic=decision, semantic=semantic
-                )
-                if requires_review:
-                    route = Route.REVIEW
-                    decision = decision.__class__(
-                        True, merged_categories, (), decision.policy_version
-                    )
-            except RiskClassificationUnavailable as error:
-                failure_class = error.failure_class
-                route = Route.UNSUPPORTED
         categories = sorted(category.value for category in decision.categories)
         snapshot_payload = {
             "body": body,
             "route": route.value,
             "categories": categories,
-            "semantic": semantic.model_dump(mode="json") if semantic else None,
-            "failure_class": failure_class,
         }
         snapshot_hash = hashlib.sha256(
             json.dumps(snapshot_payload, sort_keys=True).encode()
@@ -197,10 +177,6 @@ def build_graph(
             "policy_version": decision.policy_version,
             "deterministic_match": bool(decision.matched_rule_ids),
             "matched_rule_ids": list(decision.matched_rule_ids),
-            "classifier_invoked": semantic is not None,
-            "classifier_attempts": 1 if semantic is not None else 0,
-            "classifier": semantic.model_dump(mode="json") if semantic else None,
-            "failure_class": failure_class,
             "pre_retrieval_route": route.value,
             "snapshot_hash": snapshot_hash,
         }

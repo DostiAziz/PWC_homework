@@ -15,7 +15,6 @@ class ErrorCode(StrEnum):
     CASE_ACCESS_DENIED = "CASE_ACCESS_DENIED"
     VERSION_CONFLICT = "VERSION_CONFLICT"
     DELIVERY_FAILED = "DELIVERY_FAILED"
-    RISK_CLASSIFICATION_UNAVAILABLE = "RISK_CLASSIFICATION_UNAVAILABLE"
     STALE_INBOUND_CLAIM = "STALE_INBOUND_CLAIM"
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
 
@@ -24,11 +23,3 @@ class SupportError(RuntimeError):
     def __init__(self, code: ErrorCode, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-class RiskClassificationUnavailable(SupportError):
-    """The semantic risk model could not produce a safe routing decision."""
-
-    def __init__(self, *, failure_class: str, message: str) -> None:
-        super().__init__(ErrorCode.RISK_CLASSIFICATION_UNAVAILABLE, message)
-        self.failure_class = failure_class

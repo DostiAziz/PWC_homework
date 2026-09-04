@@ -4,30 +4,7 @@ from pydantic import ValidationError
 from pwc_support.domain.models import (
     MessageKind,
     OutboundMessage,
-    ReviewCategory,
-    SemanticRiskDecision,
-    SemanticRiskRoute,
 )
-
-
-def test_routine_semantic_result_has_no_categories() -> None:
-    result = SemanticRiskDecision(route=SemanticRiskRoute.ROUTINE)
-    assert result.categories == frozenset()
-
-
-def test_review_and_uncertain_require_known_categories() -> None:
-    with pytest.raises(ValidationError):
-        SemanticRiskDecision(route=SemanticRiskRoute.REVIEW)
-    with pytest.raises(ValidationError):
-        SemanticRiskDecision(
-            route=SemanticRiskRoute.REVIEW,
-            categories=frozenset({"not-a-category"}),
-        )
-    result = SemanticRiskDecision(
-        route=SemanticRiskRoute.UNCERTAIN,
-        categories=frozenset({ReviewCategory.OTHER_SENSITIVE_RISK}),
-    )
-    assert result.route is SemanticRiskRoute.UNCERTAIN
 
 
 def test_reviewed_response_requires_case_and_version() -> None:

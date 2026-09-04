@@ -13,8 +13,6 @@ from pwc_support.domain.models import (
     ReviewDecisionKind,
     ReviewRequest,
     RoutingSnapshot,
-    SemanticRiskDecision,
-    SemanticRiskRoute,
 )
 from pwc_support.storage.database import Database
 from pwc_support.storage.repositories import (
@@ -37,9 +35,6 @@ def _snapshot(message_id: str = "message-1") -> RoutingSnapshot:
         provider_message_id=message_id,
         policy_version="rules-v1",
         deterministic_match=False,
-        classifier_invoked=True,
-        classifier_attempts=1,
-        classifier=SemanticRiskDecision(route=SemanticRiskRoute.ROUTINE),
         pre_retrieval_route="plan",
         snapshot_hash="snapshot-hash-1",
     )
