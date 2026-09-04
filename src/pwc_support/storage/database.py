@@ -191,6 +191,14 @@ class Database:
             self._add_missing_column(
                 connection, "refund_requests", "version", "INTEGER NOT NULL DEFAULT 1"
             )
+            for column, declaration in (
+                ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
+                ("fulfilment_status", "TEXT NOT NULL DEFAULT 'processing'"),
+                ("shipped_at", "TEXT"),
+                ("cancelled_at", "TEXT"),
+                ("version", "INTEGER NOT NULL DEFAULT 1"),
+            ):
+                self._add_missing_column(connection, "orders", column, declaration)
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_cases_inbound_message

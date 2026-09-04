@@ -16,7 +16,12 @@ CREATE TABLE IF NOT EXISTS customers (customer_id TEXT PRIMARY KEY, email TEXT N
 CREATE TABLE IF NOT EXISTS orders (
     order_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(customer_id),
     status TEXT NOT NULL, total NUMERIC NOT NULL CHECK(total >= 0), currency TEXT NOT NULL,
-    delivered_at TEXT
+    delivered_at TEXT,
+    payment_status TEXT NOT NULL DEFAULT 'unpaid',
+    fulfilment_status TEXT NOT NULL DEFAULT 'processing',
+    shipped_at TEXT,
+    cancelled_at TEXT,
+    version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS order_items (
     item_id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(order_id),
@@ -37,6 +42,14 @@ CREATE TABLE IF NOT EXISTS retail_audit_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, entity_id TEXT NOT NULL,
     details_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS order_cancellation_actions (
+    review_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+    order_id TEXT NOT NULL REFERENCES orders(order_id),
+    customer_id TEXT NOT NULL REFERENCES customers(customer_id),
+    status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_returns_status ON return_requests(status);
+CREATE INDEX IF NOT EXISTS idx_cancellation_actions_order
+    ON order_cancellation_actions(order_id);

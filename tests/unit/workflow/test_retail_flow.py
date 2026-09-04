@@ -17,15 +17,36 @@ def _db(tmp_path: Path) -> Database:
     db.initialize()
     with db.connect() as c:
         c.execute(
-            "INSERT INTO products VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO products (product_id,name,category,price,currency,attributes_json,active) "
+            "VALUES (?,?,?,?,?,?,?)",
             ("P-1", "Trail Jacket", "outerwear", "129.00", "EUR", "{}", 1),
         )
-        c.execute("INSERT INTO inventory VALUES (?,?,?)", ("P-1", "WH-1", 4))
-        c.execute("INSERT INTO customers VALUES (?,?)", ("CUS-1", "a@example.test"))
+        c.execute(
+            "INSERT INTO inventory (product_id,location,quantity) VALUES (?,?,?)",
+            ("P-1", "WH-1", 4),
+        )
+        c.execute(
+            "INSERT INTO customers (customer_id,email) VALUES (?,?)", ("CUS-1", "a@example.test")
+        )
         delivered = (datetime.now(UTC) - timedelta(days=2)).isoformat()
         c.execute(
-            "INSERT INTO orders VALUES (?,?,?,?,?,?)",
-            ("ORD-1", "CUS-1", "delivered", "129.00", "EUR", delivered),
+            "INSERT INTO orders ("
+            "order_id,customer_id,status,total,currency,delivered_at,"
+            "payment_status,fulfilment_status,shipped_at,cancelled_at,version"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-1",
+                "CUS-1",
+                "delivered",
+                "129.00",
+                "EUR",
+                delivered,
+                "paid",
+                "delivered",
+                delivered,
+                None,
+                1,
+            ),
         )
         c.execute(
             "INSERT INTO order_items VALUES (?,?,?,?,?)", ("ITEM-1", "ORD-1", "P-1", 1, "129.00")
