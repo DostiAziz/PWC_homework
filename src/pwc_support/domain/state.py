@@ -1,51 +1,19 @@
-from __future__ import annotations
+from operator import add
+from typing import Annotated, Literal, TypedDict
 
-from typing import Annotated, Any, TypedDict
-
-from pwc_support.domain.models import SpecialistResult, TaskResult
-from pwc_support.workflow.reducers import (
-    append_events,
-    merge_rag_results,
-    merge_specialist_results,
-    merge_task_results,
-)
+from pwc_support.domain.models import CancellationPreview, Citation, Task, TaskResult, TraceEvent
 
 
 class SupportState(TypedDict, total=False):
-    """Shared workflow state: every node reads and writes named slices of it."""
-
-    message: dict[str, Any]
-    run_id: str
-    conversation_id: str
-    thread_id: str
-    client_id: str
-    channel: str
-    case_id: str | None
-    triage: dict[str, Any]
-    routing_snapshot: dict[str, Any]
-    evidence: dict[str, Any]
-    plan: dict[str, Any]
-    expected_task_ids: list[str]
-    task: dict[str, Any]
-    task_results: Annotated[dict[str, TaskResult], merge_task_results]
-    rag_results: Annotated[list[dict[str, Any]], merge_rag_results]
-    draft: dict[str, Any]
-    draft_version: int
-    proposed_actions: list[dict[str, Any]]
-    tool_calls: Annotated[list[dict[str, Any]], append_events]
-    verification: dict[str, Any]
-    review_request: dict[str, Any]
-    events: Annotated[list[dict[str, Any]], append_events]
-    delivery: dict[str, Any]
-    error: dict[str, Any]
-    outcome: dict[str, Any]
-    retail_intent: str
-    retail_answer: str
-    action_proposal: dict[str, Any]
-    # --- Agentic specialist routing slices (classifier + specialist subgraphs) ---
-    routing_decision: dict[str, Any]
-    routing_tasks: list[dict[str, Any]]
-    active_specialist: str | None
-    conversation_memory: dict[str, Any] | None
-    specialist_results: Annotated[dict[str, SpecialistResult], merge_specialist_results]
-    joined_response_parts: list[str]
+    message: str
+    customer_id: str
+    pending_cancellation: CancellationPreview | None
+    confirmation: Literal["yes", "no", "unclear"] | None
+    task: Task
+    tasks: tuple[Task, ...]
+    results: Annotated[list[TaskResult], add]
+    ordered_results: tuple[TaskResult, ...]
+    direct_response: str
+    response: str
+    citations: tuple[Citation, ...]
+    events: Annotated[list[TraceEvent], add]

@@ -5,12 +5,12 @@ import pytest
 from pydantic import ValidationError
 
 from pwc_support.domain.models import (
+    CatalogueAction,
     Channel,
     IncomingMessage,
-    PlannedTask,
-    ReviewCategory,
+    OrderAction,
+    Task,
     TaskKind,
-    WorkPlan,
 )
 
 
@@ -50,12 +50,24 @@ def test_message_rejects_oversized_body() -> None:
         )
 
 
-def test_work_plan_is_bounded() -> None:
-    task = PlannedTask(
-        task_id="t-1",
-        kind=TaskKind.KNOWLEDGE_QUERY,
-        input="What services are available?",
+def test_catalogue_task_rejects_order_action() -> None:
+    with pytest.raises(ValidationError):
+        Task(
+            task_id="task-1",
+            kind=TaskKind.CATALOGUE,
+            request="Show offers",
+            catalogue_action=CatalogueAction.OFFERS,
+            order_action=OrderAction.CANCEL,
+        )
+
+
+def test_order_task_normalizes_order_id() -> None:
+    task = Task(
+        task_id="task-1",
+        kind=TaskKind.ORDER,
+        request="Cancel ord-2001",
+        order_action=OrderAction.CANCEL,
+        order_id="ord-2001",
     )
-    plan = WorkPlan(tasks=(task,))
-    assert plan.tasks[0].kind.value == "knowledge_query"
-    assert ReviewCategory.CONFIDENTIALITY.value == "confidentiality"
+
+    assert task.order_id == "ORD-2001"
