@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, TypedDict
 
-from pwc_support.domain.models import TaskResult
-from pwc_support.workflow.reducers import append_events, merge_rag_results, merge_task_results
+from pwc_support.domain.models import SpecialistResult, TaskResult
+from pwc_support.workflow.reducers import (
+    append_events,
+    merge_rag_results,
+    merge_specialist_results,
+    merge_task_results,
+)
 
 
 class SupportState(TypedDict, total=False):
@@ -37,3 +42,10 @@ class SupportState(TypedDict, total=False):
     retail_intent: str
     retail_answer: str
     action_proposal: dict[str, Any]
+    # --- Agentic specialist routing slices (classifier + specialist subgraphs) ---
+    routing_decision: dict[str, Any]
+    routing_tasks: list[dict[str, Any]]
+    active_specialist: str | None
+    conversation_memory: dict[str, Any] | None
+    specialist_results: Annotated[dict[str, SpecialistResult], merge_specialist_results]
+    joined_response_parts: list[str]
