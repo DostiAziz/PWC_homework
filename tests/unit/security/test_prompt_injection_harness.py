@@ -34,21 +34,59 @@ def _retail_db(tmp_path: Path) -> Database:
     db.initialize()
     with db.connect() as c:
         c.execute(
-            "INSERT INTO products VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO products (product_id,name,category,price,currency,attributes_json,active) "
+            "VALUES (?,?,?,?,?,?,?)",
             ("P-1", "Jacket", "outerwear", "120", "EUR", "{}", 1),
         )
-        c.execute("INSERT INTO customers VALUES (?,?)", ("C-1", "c@example.test"))
         c.execute(
-            "INSERT INTO orders VALUES (?,?,?,?,?,?)",
-            ("ORD-1", "C-1", "delivered", "120", "EUR", "2026-09-01T00:00:00+00:00"),
+            "INSERT INTO customers (customer_id,email) VALUES (?,?)", ("C-1", "c@example.test")
         )
         c.execute(
-            "INSERT INTO order_items VALUES (?,?,?,?,?)", ("ITEM-1", "ORD-1", "P-1", 1, "120")
+            "INSERT INTO orders ("
+            "order_id,customer_id,status,total,currency,delivered_at,"
+            "payment_status,fulfilment_status,shipped_at,cancelled_at,version"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-1",
+                "C-1",
+                "delivered",
+                "120",
+                "EUR",
+                "2026-09-01T00:00:00+00:00",
+                "paid",
+                "delivered",
+                "2026-08-28T00:00:00+00:00",
+                None,
+                1,
+            ),
         )
-        c.execute("INSERT INTO customers VALUES (?,?)", ("C-2", "other@example.test"))
         c.execute(
-            "INSERT INTO orders VALUES (?,?,?,?,?,?)",
-            ("ORD-2", "C-2", "delivered", "120", "EUR", "2026-09-01T00:00:00+00:00"),
+            "INSERT INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
+            ("ITEM-1", "ORD-1", "P-1", 1, "120"),
+        )
+        c.execute(
+            "INSERT INTO customers (customer_id,email) VALUES (?,?)",
+            ("C-2", "other@example.test"),
+        )
+        c.execute(
+            "INSERT INTO orders ("
+            "order_id,customer_id,status,total,currency,delivered_at,"
+            "payment_status,fulfilment_status,shipped_at,cancelled_at,version"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-2",
+                "C-2",
+                "delivered",
+                "120",
+                "EUR",
+                "2026-09-01T00:00:00+00:00",
+                "paid",
+                "delivered",
+                "2026-08-28T00:00:00+00:00",
+                None,
+                1,
+            ),
         )
     return db
 

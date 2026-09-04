@@ -12,7 +12,9 @@ def seed(database: Database) -> None:
     now = datetime.now(UTC)
     with database.connect() as c:
         c.executemany(
-            "INSERT OR IGNORE INTO products VALUES (?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO products "
+            "(product_id,name,category,price,currency,attributes_json,active) "
+            "VALUES (?,?,?,?,?,?,?)",
             [
                 (
                     "PROD-1001",
@@ -116,7 +118,7 @@ def seed(database: Database) -> None:
             ],
         )
         c.executemany(
-            "INSERT OR IGNORE INTO inventory VALUES (?,?,?)",
+            "INSERT OR IGNORE INTO inventory (product_id,location,quantity) VALUES (?,?,?)",
             [
                 ("PROD-1001", "budapest", 7),
                 ("PROD-1001", "vienna", 4),
@@ -133,7 +135,8 @@ def seed(database: Database) -> None:
             ],
         )
         c.executemany(
-            "INSERT OR IGNORE INTO offers VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO offers "
+            "(offer_id,product_id,description,discount_percent,active) VALUES (?,?,?,?,?)",
             [
                 ("OFFER-10", "PROD-1001", "10% off", 10, 1),
                 ("OFFER-OLD", "PROD-1002", "5% off expired", 5, 0),
@@ -141,11 +144,20 @@ def seed(database: Database) -> None:
             ],
         )
         c.execute(
-            "INSERT OR IGNORE INTO customers VALUES (?,?)", ("CUS-1001", "client@example.test")
+            "INSERT OR IGNORE INTO customers (customer_id,email) VALUES (?,?)",
+            ("CUS-1001", "client@example.test"),
         )
-        c.execute("INSERT OR IGNORE INTO customers VALUES (?,?)", ("CUS-1002", "late@example.test"))
         c.execute(
-            "INSERT OR IGNORE INTO orders VALUES (?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO customers (customer_id,email) VALUES (?,?)",
+            ("CUS-1002", "late@example.test"),
+        )
+        order_columns = (
+            "order_id,customer_id,status,total,currency,delivered_at,"
+            "payment_status,fulfilment_status,shipped_at,cancelled_at,version"
+        )
+        # ORD-1001 is the standard client fixture: a fully delivered order.
+        c.execute(
+            f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "ORD-1001",
                 "CUS-1001",
@@ -153,22 +165,43 @@ def seed(database: Database) -> None:
                 "129.99",
                 "EUR",
                 (now - timedelta(days=5)).isoformat(),
+                "paid",
+                "delivered",
+                (now - timedelta(days=8)).isoformat(),
+                None,
+                1,
             ),
         )
         c.execute(
-            "INSERT OR IGNORE INTO order_items VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
             ("ITEM-1001", "ORD-1001", "PROD-1001", 1, "129.99"),
         )
+        # ORD-2001: processing and unpaid.
         c.execute(
-            "INSERT OR IGNORE INTO orders VALUES (?,?,?,?,?,?)",
-            ("ORD-2001", "CUS-1001", "processing", "79.99", "EUR", None),
+            f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-2001",
+                "CUS-1001",
+                "processing",
+                "79.99",
+                "EUR",
+                None,
+                "unpaid",
+                "processing",
+                None,
+                None,
+                1,
+            ),
         )
         c.execute(
-            "INSERT OR IGNORE INTO order_items VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
             ("ITEM-2001", "ORD-2001", "PROD-2001", 1, "79.99"),
         )
+        # ORD-3001: delivered, but well outside the return window.
         c.execute(
-            "INSERT OR IGNORE INTO orders VALUES (?,?,?,?,?,?)",
+            f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "ORD-3001",
                 "CUS-1002",
@@ -176,11 +209,61 @@ def seed(database: Database) -> None:
                 "999.99",
                 "EUR",
                 (now - timedelta(days=45)).isoformat(),
+                "paid",
+                "delivered",
+                (now - timedelta(days=48)).isoformat(),
+                None,
+                1,
             ),
         )
         c.execute(
-            "INSERT OR IGNORE INTO order_items VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
             ("ITEM-3001", "ORD-3001", "PROD-7001", 1, "999.99"),
+        )
+        # ORD-4001: paid, but not yet shipped.
+        c.execute(
+            f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-4001",
+                "CUS-1001",
+                "paid",
+                "59.99",
+                "EUR",
+                None,
+                "paid",
+                "processing",
+                None,
+                None,
+                1,
+            ),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
+            ("ITEM-4001", "ORD-4001", "PROD-3002", 1, "59.99"),
+        )
+        # ORD-5001: paid and shipped, but not yet delivered.
+        c.execute(
+            f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ORD-5001",
+                "CUS-1001",
+                "shipped",
+                "49.99",
+                "EUR",
+                None,
+                "paid",
+                "shipped",
+                (now - timedelta(days=1)).isoformat(),
+                None,
+                1,
+            ),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO order_items (item_id,order_id,product_id,quantity,unit_price) "
+            "VALUES (?,?,?,?,?)",
+            ("ITEM-5001", "ORD-5001", "PROD-4001", 1, "49.99"),
         )
 
 
