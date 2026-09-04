@@ -39,6 +39,8 @@ class Settings(BaseModel):
     reviewer_ids: tuple[str, ...] = ("specialist-1",)
     conversation_memory_max_chars: int = Field(default=12000, ge=500, le=100000)
     specialist_max_steps: int = Field(default=8, ge=1, le=50)
+    classifier_model: str = "gpt-oss:20b"
+    classifier_prompt_version: str = "intent-classifier-v1"
 
     @property
     def operations_db(self) -> Path:
@@ -103,4 +105,8 @@ class Settings(BaseModel):
                 os.getenv("PWC_CONVERSATION_MEMORY_MAX_CHARS", "12000")
             ),
             specialist_max_steps=int(os.getenv("PWC_SPECIALIST_MAX_STEPS", "8")),
+            classifier_model=os.getenv("PWC_CLASSIFIER_MODEL", "gpt-oss:20b"),
+            classifier_prompt_version=os.getenv(
+                "PWC_CLASSIFIER_PROMPT_VERSION", "intent-classifier-v1"
+            ),
         )
