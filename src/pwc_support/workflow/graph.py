@@ -135,7 +135,10 @@ def build_graph(
                 message=(
                     rag.answer
                     if rag.status == "answered"
-                    else "I could not find grounded policy information for that question."
+                    else (
+                        "I could not find grounded policy information for that question. "
+                        "Our retail support documents do not contain that information."
+                    )
                 ),
                 citations=rag.citations,
             )

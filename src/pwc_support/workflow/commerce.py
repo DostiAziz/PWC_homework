@@ -96,7 +96,7 @@ class CommerceTools:
             return TaskResult(
                 task_id=task.task_id,
                 kind=task.kind,
-                message="Please provide the order number, for example ORD-2001.",
+                message="Please provide the order ID or order number, for example ORD-2001.",
             )
         order = self.orders.lookup(task.order_id, customer_id)
         if order is None:
@@ -151,7 +151,7 @@ class CommerceTools:
             return TaskResult(
                 task_id=task.task_id,
                 kind=task.kind,
-                message="Please provide the order number, for example ORD-2001.",
+                message="Please provide the order ID or order number, for example ORD-2001.",
             )
         order = self.orders.lookup(task.order_id, customer_id)
         message = (

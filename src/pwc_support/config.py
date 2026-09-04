@@ -20,7 +20,7 @@ class Settings(BaseModel):
     collection_name: str = "retail_support_v1_nomic_768_cosine"
     num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
-    schema_tokens: int = Field(default=256, ge=64, le=512)
+    schema_tokens: int = Field(default=1024, ge=64, le=4096)
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     max_parallel_generations: int = Field(default=1, ge=1, le=2)
     embedding_batch_size: int = Field(default=16, ge=1, le=64)
@@ -79,7 +79,7 @@ class Settings(BaseModel):
             embedding_model=os.getenv("PWC_EMBEDDING_MODEL", "nomic-embed-text"),
             answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
             num_ctx=int(os.getenv("PWC_NUM_CTX", "8192")),
-            schema_tokens=int(os.getenv("PWC_SCHEMA_TOKENS", "256")),
+            schema_tokens=int(os.getenv("PWC_SCHEMA_TOKENS", "512")),
             request_timeout_seconds=float(os.getenv("PWC_REQUEST_TIMEOUT_SECONDS", "120")),
             max_parallel_generations=int(os.getenv("PWC_MAX_PARALLEL_GENERATIONS", "1")),
             retail_db_path=Path(retail_db_override) if retail_db_override else None,

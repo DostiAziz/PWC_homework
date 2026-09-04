@@ -15,7 +15,11 @@ from pwc_support.bootstrap import build_runtime
 from pwc_support.config import Settings
 from pwc_support.domain.models import ChatReply
 from pwc_support.storage.database import Database
-from scripts.seed_retail_data import seed
+
+try:
+    from scripts.seed_retail_data import seed
+except ModuleNotFoundError:
+    from seed_retail_data import seed  # type: ignore[import-not-found,no-redef]
 
 CRITERIA = ("routing", "sources", "terms", "safety", "attribution", "conversation")
 MARKER = re.compile(r"\[S\d+\]")
