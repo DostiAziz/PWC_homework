@@ -1,5 +1,5 @@
 from domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from rag.answer import RagAnswerer, prepare_query
+from rag import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:

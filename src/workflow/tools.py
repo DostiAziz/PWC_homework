@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool, tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from domain.models import CancellationPreview, Citation, RagRequest
-from rag.answer import RagAnswerer
+from rag import RagAnswerer
 from storage.retail_repositories import (
     CancellationConflict,
     OrderRepository,

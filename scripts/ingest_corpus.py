@@ -14,8 +14,7 @@ from rag.ingest import (
     load_manifest,
     prepare_chunks,
 )
-from rag.lexical import LexicalIndex
-from rag.store import ChromaKnowledgeBase, chroma_client
+from rag import ChromaKnowledgeBase, LexicalIndex, chroma_client
 
 
 def main() -> None:
