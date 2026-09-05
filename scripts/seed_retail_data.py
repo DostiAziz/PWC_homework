@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from customer_support.config import Settings
-from customer_support.storage.database import Database
+from config import Settings
+from storage.database import Database
 
 
 def seed(database: Database) -> None:

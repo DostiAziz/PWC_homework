@@ -2,13 +2,13 @@ from pathlib import Path
 
 import chromadb
 
-from customer_support.rag.ingest import (
+from rag.ingest import (
     ChunkingConfig,
     load_documents,
     load_manifest,
     prepare_chunks,
 )
-from customer_support.rag.store import ChromaKnowledgeBase
+from rag.store import ChromaKnowledgeBase
 
 
 class FakeEmbedder:

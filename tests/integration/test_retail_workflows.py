@@ -1,9 +1,9 @@
-from customer_support.rag.answer import RagAnswerer
-from customer_support.storage.database import Database
-from customer_support.storage.retail_repositories import OrderRepository, ProductRepository
-from customer_support.workflow.agent_graph import build_agent_graph
-from customer_support.workflow.tools import ToolRegistry
+from rag.answer import RagAnswerer
+from storage.database import Database
+from storage.retail_repositories import OrderRepository, ProductRepository
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
+from workflow.agent_graph import build_agent_graph
+from workflow.tools import ToolRegistry
 
 
 class ScriptedModel:

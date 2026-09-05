@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from customer_support.storage.database import Database
 from scripts.seed_retail_data import seed
+from storage.database import Database
 
 
 @pytest.fixture

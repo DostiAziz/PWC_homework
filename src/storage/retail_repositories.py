@@ -4,14 +4,14 @@ import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from customer_support.domain.models import (
+from domain.models import (
     CancellationPreview,
     CancellationResult,
     OfferSummary,
     OrderSummary,
     ProductSummary,
 )
-from customer_support.storage.database import Database
+from storage.database import Database
 
 
 class CancellationConflict(Exception):

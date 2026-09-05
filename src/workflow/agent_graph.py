@@ -10,8 +10,8 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
-from customer_support.domain.models import Citation
-from customer_support.workflow.tools import TOOL_SCHEMAS, ToolRegistry
+from domain.models import Citation
+from workflow.tools import TOOL_SCHEMAS, ToolRegistry
 
 SYSTEM_PROMPT = (
     "You are a retail customer support agent. Use the tools to answer questions about "

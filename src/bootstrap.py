@@ -3,17 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from customer_support.config import Settings
-from customer_support.llm.embeddings import get_embeddings
-from customer_support.llm.ollama import get_chat_model
-from customer_support.rag.answer import RagAnswerer
-from customer_support.rag.lexical import LexicalIndex
-from customer_support.rag.store import ChromaKnowledgeBase, chroma_client
-from customer_support.services.chat import AgentService
-from customer_support.storage.database import Database
-from customer_support.storage.retail_repositories import OrderRepository, ProductRepository
-from customer_support.workflow.agent_graph import build_agent_graph
-from customer_support.workflow.tools import ToolRegistry
+from config import Settings
+from llm.embeddings import get_embeddings
+from llm.ollama import get_chat_model
+from rag.answer import RagAnswerer
+from rag.lexical import LexicalIndex
+from rag.store import ChromaKnowledgeBase, chroma_client
+from services.chat import AgentService
+from storage.database import Database
+from storage.retail_repositories import OrderRepository, ProductRepository
+from workflow.agent_graph import build_agent_graph
+from workflow.tools import ToolRegistry
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
 

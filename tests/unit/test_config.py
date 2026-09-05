@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from customer_support.config import Settings
+from config import Settings
 
 
 def test_defaults_point_to_new_retail_database(tmp_path: Path) -> None:
