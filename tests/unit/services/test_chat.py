@@ -1,6 +1,7 @@
 from typing import Any
 
 from langgraph.types import Command
+
 from pwc_support.services.chat import AgentService
 
 
@@ -19,11 +20,12 @@ class FakeGraph:
         text = payload["messages"][-1]["content"]
         if "cancel" in text:
 
-            class _I:  # mimic Interrupt object
-                value = {
-                    "order_id": "ORD-2001",
-                    "summary": "Cancel order ORD-2001 for 79.99 EUR",
-                }
+            class _I:
+                def __init__(self) -> None:
+                    self.value = {
+                        "order_id": "ORD-2001",
+                        "summary": "Cancel order ORD-2001 for 79.99 EUR",
+                    }
 
             return {"__interrupt__": [_I()]}
         return {

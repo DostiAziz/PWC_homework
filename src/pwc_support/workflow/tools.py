@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from pwc_support.domain.models import CancellationPreview, Citation, RagRequest
@@ -13,7 +14,7 @@ from pwc_support.storage.retail_repositories import (
     ProductRepository,
 )
 
-TOOL_SCHEMAS: list[dict] = [
+TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -54,7 +55,9 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_policies",
-            "description": "Answer a shipping, warranty, or cancellation policy question from the docs.",
+            "description": (
+                "Answer a shipping, warranty, or cancellation policy question from the docs."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"question": {"type": "string"}},
@@ -66,7 +69,9 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "cancel_order",
-            "description": "Start cancelling the current customer's order. Requires user confirmation.",
+            "description": (
+                "Start cancelling the current customer's order. Requires user confirmation."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"order_id": {"type": "string"}},
@@ -124,26 +129,25 @@ class ToolRegistry:
             return "The order could not be changed safely. No cancellation was made."
         return f"Order {result.order_id} has been cancelled."
 
-    def run(self, name: str, arguments: dict, *, customer_id: str) -> ToolOutcome:
+    def run(self, name: str, arguments: dict[str, Any], *, customer_id: str) -> ToolOutcome:
         try:
             handler = getattr(self, f"_{name}", None)
             if handler is None:
                 return ToolOutcome(content=f"Unknown tool: {name}.")
-            return handler(arguments, customer_id)
+            outcome: ToolOutcome = handler(arguments, customer_id)
+            return outcome
         except sqlite3.Error:
             return ToolOutcome(content="That data source is unavailable. Please try again.")
 
-    def _search_products(self, args: dict, customer_id: str) -> ToolOutcome:
+    def _search_products(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         products = self.products.search(str(args.get("query", "")))
         body = (
-            "\n".join(
-                f"{p.name}: {p.price} {p.currency}, {p.stock} in stock" for p in products
-            )
+            "\n".join(f"{p.name}: {p.price} {p.currency}, {p.stock} in stock" for p in products)
             or "No available products matched your request."
         )
         return ToolOutcome(content=body)
 
-    def _list_offers(self, args: dict, customer_id: str) -> ToolOutcome:
+    def _list_offers(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         offers = self.products.list_active_offers(query=args.get("category"))
         body = (
             "\n".join(
@@ -154,13 +158,13 @@ class ToolRegistry:
         )
         return ToolOutcome(content=body)
 
-    def _get_order_status(self, args: dict, customer_id: str) -> ToolOutcome:
+    def _get_order_status(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         order = self.orders.lookup(str(args.get("order_id", "")), customer_id)
         if order is None:
             return ToolOutcome(content="I could not find that order for this customer.")
         return ToolOutcome(content=f"Order {order.order_id} is {order.status}.")
 
-    def _search_policies(self, args: dict, customer_id: str) -> ToolOutcome:
+    def _search_policies(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         result = self.rag.answer(RagRequest(question=str(args.get("question", ""))))
         if result.status != "answered":
             return ToolOutcome(
@@ -171,7 +175,7 @@ class ToolRegistry:
             )
         return ToolOutcome(content=result.answer, citations=result.citations)
 
-    def _cancel_order(self, args: dict, customer_id: str) -> ToolOutcome:
+    def _cancel_order(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         return ToolOutcome(
             content="", requires_confirmation=True, order_id=str(args.get("order_id", ""))
         )

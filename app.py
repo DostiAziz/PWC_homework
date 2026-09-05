@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import streamlit as st
@@ -27,22 +28,20 @@ def render_citations(citations: tuple[Citation, ...]) -> None:
 
 
 def render_trace(reply: ChatReply) -> None:
-    with st.expander(f"Trace: {len(reply.events)} events, {reply.total_duration_ms:.0f} ms"):
-        if reply.tasks:
-            st.caption("Tasks: " + ", ".join(task.kind.value for task in reply.tasks))
-        st.dataframe(
-            [event.model_dump(mode="json") for event in reply.events],
-            hide_index=True,
-            width="stretch",
-        )
+    label = f"Trace: {len(reply.steps)} steps, {reply.total_duration_ms:.0f} ms"
+    with st.expander(label):
+        if reply.steps:
+            st.caption("Tools used: " + ", ".join(reply.steps))
+        if reply.awaiting_confirmation:
+            st.info(f"⏸ Awaiting confirmation: {reply.preview}")
 
 
 def initialise_session() -> None:
     defaults: dict[str, Any] = {
         "messages": [],
         "customer_id": "CUS-1001",
-        "pending_cancellation": None,
-        "awaiting_cancel": False,
+        "thread_id": str(uuid.uuid4()),
+        "awaiting_confirmation": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -79,14 +78,15 @@ for entry in st.session_state.messages:
 if question := st.chat_input("Ask about products, offers, policies, or your order"):
     st.session_state.messages.append({"role": "user", "content": question})
     with st.spinner("Running locally"):
-        reply = runtime.service.submit(
-            body=question,
-            customer_id=st.session_state.customer_id,
-            pending_cancellation=st.session_state.pending_cancellation,
-            awaiting_cancel=st.session_state.awaiting_cancel,
-        )
-    st.session_state.pending_cancellation = reply.pending_cancellation
-    st.session_state.awaiting_cancel = reply.awaiting_cancel
+        if st.session_state.awaiting_confirmation:
+            reply = runtime.service.resume(thread_id=st.session_state.thread_id, decision=question)
+        else:
+            reply = runtime.service.submit(
+                thread_id=st.session_state.thread_id,
+                body=question,
+                customer_id=st.session_state.customer_id,
+            )
+    st.session_state.awaiting_confirmation = reply.awaiting_confirmation
     st.session_state.messages.append(
         {"role": "assistant", "content": reply.message, "reply": reply}
     )

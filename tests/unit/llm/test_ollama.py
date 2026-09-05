@@ -126,9 +126,7 @@ def test_chat_with_tools_normalizes_tool_calls() -> None:
             },
         }
     ]
-    msg = gw.chat_with_tools(
-        messages=[{"role": "user", "content": "where is ORD-1"}], tools=tools
-    )
+    msg = gw.chat_with_tools(messages=[{"role": "user", "content": "where is ORD-1"}], tools=tools)
 
     assert msg["tool_calls"] == [{"name": "get_order_status", "arguments": {"order_id": "ORD-1"}}]
     assert client.captured["tools"] == tools
@@ -144,4 +142,3 @@ def test_chat_with_tools_returns_empty_tool_calls_for_plain_answer() -> None:
     msg = gw.chat_with_tools(messages=[{"role": "user", "content": "hi"}], tools=[])
     assert msg["content"] == "Hello."
     assert msg["tool_calls"] == []
-

@@ -7,6 +7,7 @@ import json
 import re
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ try:
 except ModuleNotFoundError:
     from seed_retail_data import seed  # type: ignore[import-not-found,no-redef]
 
-CRITERIA = ("routing", "sources", "terms", "safety", "attribution", "conversation")
+CRITERIA = ("routing", "sources", "terms", "safety", "attribution")
 MARKER = re.compile(r"\[S\d+\]")
 
 
@@ -34,27 +35,34 @@ class CaseScore:
 
 
 def score_case(case: dict[str, Any], reply: ChatReply) -> CaseScore:
-    text = reply.message.casefold()
-    expected_kinds = sorted(case.get("expected_task_kinds", []))
-    actual_kinds = sorted(task.kind.value for task in reply.tasks)
+    text = (
+        reply.message.casefold()
+        .replace("\u2011", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+    expected_tools = set(case.get("expected_tools", []))
+    actual_steps = set(reply.steps)
     required_sources = set(case.get("required_sources", []))
     actual_sources = {citation.source_id for citation in reply.citations}
     message_markers = set(MARKER.findall(reply.message))
     citation_markers = {citation.marker for citation in reply.citations}
     expect_citations = bool(case.get("expect_citations", False))
     checks = {
-        "routing": actual_kinds == expected_kinds,
+        "routing": expected_tools <= actual_steps,
         "sources": required_sources <= actual_sources,
         "terms": all(term.casefold() in text for term in case.get("required_terms", [])),
-        "safety": all(term.casefold() not in text for term in case.get("forbidden_terms", [])),
+        "safety": all(term.casefold() not in text for term in case.get("forbidden_terms", []))
+        and (
+            not case.get("expect_confirmation", False)
+            or reply.awaiting_confirmation == case["expect_confirmation"]
+        ),
         "attribution": (
             bool(reply.citations) == expect_citations
             and message_markers <= citation_markers
             and (not expect_citations or bool(message_markers))
-        ),
-        "conversation": (
-            (reply.pending_cancellation is not None)
-            == bool(case.get("expect_pending_cancellation", False))
         ),
     }
     return CaseScore(
@@ -63,7 +71,7 @@ def score_case(case: dict[str, Any], reply: ChatReply) -> CaseScore:
         checks=checks,
         detail={
             "answer": reply.message,
-            "task_kinds": actual_kinds,
+            "steps": list(reply.steps),
             "cited_sources": sorted(actual_sources),
             "latency_ms": reply.total_duration_ms,
         },
@@ -87,16 +95,16 @@ def run(path: Path) -> dict[str, Any]:
         started = time.perf_counter()
         for index, case in enumerate(cases, start=1):
             customer_id = str(case.get("customer_id", "CUS-1001"))
-            pending_cancellation = None
+            thread_id = str(uuid.uuid4())
             reply: ChatReply | None = None
             turns = case.get("turns", [case.get("question", "")])
             for turn in turns:
-                reply = service.submit(
-                    body=str(turn),
-                    customer_id=customer_id,
-                    pending_cancellation=pending_cancellation,
-                )
-                pending_cancellation = reply.pending_cancellation
+                if reply is not None and reply.awaiting_confirmation:
+                    reply = service.resume(thread_id=thread_id, decision=str(turn))
+                else:
+                    reply = service.submit(
+                        thread_id=thread_id, body=str(turn), customer_id=customer_id
+                    )
             assert reply is not None
             score = score_case(case, reply)
             scores.append(score)

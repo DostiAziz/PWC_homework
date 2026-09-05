@@ -14,7 +14,7 @@ from typing import Any
 
 from pwc_support.bootstrap import build_runtime
 from pwc_support.config import Settings
-from pwc_support.services.chat import ChatService
+from pwc_support.services.chat import AgentService
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +36,7 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def run_phase(
-    service: ChatService,
+    service: AgentService,
     workload: list[dict[str, Any]],
     *,
     requests: int,
@@ -58,17 +58,13 @@ def run_phase(
                 node_ms={},
                 error=f"{type(error).__name__}: {error}",
             )
-        node_ms: dict[str, float] = defaultdict(float)
-        for event in reply.events:
-            node_ms[event.node] += event.duration_ms or 0.0
-        failed = any(
-            event.node == "service" and event.event_type == "failed" for event in reply.events
-        )
+        failed = "unavailable" in reply.message.lower()
+        node_ms: dict[str, float] = {"agent": reply.total_duration_ms}
         return RequestSample(
             index=index,
             question_id=str(case["id"]),
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            node_ms=dict(node_ms),
+            node_ms=node_ms,
             error=reply.message if failed else None,
         )
 

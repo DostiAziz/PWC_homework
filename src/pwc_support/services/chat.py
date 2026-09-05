@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any, Protocol
 
 from langgraph.types import Command
@@ -12,16 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class AgentGraph(Protocol):
-    def invoke(self, payload: Any, config: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any: ...
 
 
 class AgentService:
     def __init__(self, graph: AgentGraph) -> None:
         self.graph = graph
 
-    def submit(self, *, thread_id: str, body: str, customer_id: str) -> ChatReply:
+    def submit(self, *, body: str, customer_id: str, thread_id: str | None = None) -> ChatReply:
+        tid = thread_id or str(uuid.uuid4())
         payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
-        return self._run(payload, thread_id)
+        return self._run(payload, tid)
 
     def resume(self, *, thread_id: str, decision: str) -> ChatReply:
         return self._run(Command(resume=decision), thread_id)
@@ -44,6 +46,7 @@ class AgentService:
                 message=value.get("summary", "") + "? Please answer yes or no.",
                 awaiting_confirmation=True,
                 preview=value.get("summary", ""),
+                steps=("cancel_order",),
                 total_duration_ms=self._ms(started),
             )
         return ChatReply(
@@ -56,3 +59,6 @@ class AgentService:
     @staticmethod
     def _ms(started: float) -> float:
         return round((time.perf_counter() - started) * 1000, 2)
+
+
+ChatService = AgentService
