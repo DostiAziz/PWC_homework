@@ -124,8 +124,16 @@ class ChromaKnowledgeBase:
         *,
         batch_size: int = 16,
         managed_source_ids: set[str] | None = None,
+        full_reconciliation: bool = False,
     ) -> SyncReport:
-        source_ids = managed_source_ids or {chunk.source_id for chunk in chunks}
+        manifest_source_ids = {chunk.source_id for chunk in chunks}
+        source_ids = set(managed_source_ids or manifest_source_ids)
+        if full_reconciliation:
+            existing_metas = self.collection.get(include=["metadatas"]).get("metadatas", [])
+            for m in existing_metas:
+                if m and "source_id" in m:
+                    source_ids.add(str(m["source_id"]))
+
         current = {chunk.chunk_id: chunk for chunk in chunks if chunk.source_id in source_ids}
         existing_ids: set[str] = set()
         for source_id in source_ids:

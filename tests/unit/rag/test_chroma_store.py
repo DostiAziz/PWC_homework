@@ -50,3 +50,20 @@ def test_sync_removes_stale_chunks_and_source_delete_is_explicit() -> None:
 
     assert report.deleted > 0
     assert store.delete_source("shipping-and-orders") > 0
+
+
+def test_sync_full_reconciliation_automatically_removes_unmanifested_sources() -> None:
+    root = Path(__file__).parents[3] / "corpus"
+    store = ChromaKnowledgeBase(chromadb.EphemeralClient(), "reconcile_collection", FakeEmbedder())
+    chunks = prepare_chunks(load_documents(root, load_manifest(root / "manifest.json")))
+    store.sync(chunks)
+    initial_count = store.count()
+
+    reduced = tuple(chunk for chunk in chunks if chunk.source_id != "warranty-and-support")
+    report = store.sync(reduced, full_reconciliation=True)
+
+    assert report.deleted > 0
+    assert store.count() < initial_count
+    res = store.retrieve("warranty", top_k=10)
+    assert all(h.source_id != "warranty-and-support" for h in res.hits)
+
