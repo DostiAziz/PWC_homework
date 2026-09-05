@@ -28,8 +28,12 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = ["integration: requires local Ollama or Chroma"]
+
+[tool.pyright]
+extraPaths = ["src", "."]
+
 
 [tool.ruff]
 target-version = "py312"
@@ -41,4 +45,4 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
+mypy_path = "src:."

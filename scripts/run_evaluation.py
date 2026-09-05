@@ -18,7 +18,7 @@ from domain.models import ChatReply
 from storage.database import Database
 
 try:
-    from scripts.seed_retail_data import seed
+    from scripts.seed_retail_data import seed  # type: ignore[import-not-found]
 except ModuleNotFoundError:
     from seed_retail_data import seed  # type: ignore[import-not-found,no-redef]
 
