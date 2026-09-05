@@ -189,7 +189,7 @@ class ChromaKnowledgeBase:
     def retrieve(
         self, request: RagRequest | str, *, language: str = "en", top_k: int | None = None
     ) -> RetrievalBatch:
-        with record_span("retrieval"):
+        with record_span("retrieval", run_type="retriever"):
             top_k = self.top_k if top_k is None else top_k
             if isinstance(request, str):
                 request = RagRequest(

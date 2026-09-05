@@ -5,7 +5,13 @@ import os
 from pathlib import Path
 from typing import ClassVar, Literal, cast
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
+
+from observability import configure_langsmith
+
+load_dotenv()
+configure_langsmith()
 
 
 class Settings(BaseModel):
@@ -42,6 +48,10 @@ class Settings(BaseModel):
     max_selected_hits: int = Field(default=6, ge=1, le=10)
     max_evidence_chars: int = Field(default=6000, ge=500, le=40000)
     retail_db_path: Path | None = None
+    langchain_tracing_v2: bool = False
+    langchain_project: str = "retail-support"
+    langchain_endpoint: str = "https://api.smith.langchain.com"
+    langchain_api_key: str | None = None
 
     @property
     def chroma_path(self) -> Path:
@@ -101,4 +111,12 @@ class Settings(BaseModel):
             request_timeout_seconds=float(_get("REQUEST_TIMEOUT_SECONDS", "120") or "120"),
             max_parallel_generations=int(_get("MAX_PARALLEL_GENERATIONS", "1") or "1"),
             retail_db_path=Path(retail_db_override) if retail_db_override else None,
+            langchain_tracing_v2=(
+                os.getenv("LANGCHAIN_TRACING_V2", "false").lower() in ("true", "1", "yes")
+            ),
+            langchain_project=os.getenv("LANGCHAIN_PROJECT", "retail-support"),
+            langchain_endpoint=os.getenv(
+                "LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com"
+            ),
+            langchain_api_key=os.getenv("LANGCHAIN_API_KEY"),
         )

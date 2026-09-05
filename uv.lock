@@ -414,8 +414,10 @@ dependencies = [
     { name = "langchain-huggingface" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "langsmith" },
     { name = "ollama" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "sentence-transformers" },
     { name = "streamlit" },
 ]
@@ -433,8 +435,10 @@ requires-dist = [
     { name = "langchain-huggingface", specifier = ">=1.2.2" },
     { name = "langchain-openai", specifier = ">=1.6.0" },
     { name = "langgraph", specifier = "==1.2.11" },
+    { name = "langsmith", specifier = ">=0.1.0" },
     { name = "ollama", specifier = "==0.6.2" },
     { name = "pydantic", specifier = "==2.13.5" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "sentence-transformers", specifier = ">=6.0.1" },
     { name = "streamlit", specifier = "==1.63.0" },
 ]

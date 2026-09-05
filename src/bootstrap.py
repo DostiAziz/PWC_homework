@@ -6,6 +6,7 @@ from pathlib import Path
 from config import Settings
 from llm.embeddings import embedding_dimension, get_embeddings, validate_collection_dimension
 from llm.ollama import get_chat_model
+from observability import configure_langsmith
 from rag import ChromaKnowledgeBase, LexicalIndex, RagAnswerer, chroma_client
 from services.chat import AgentService
 from storage.database import Database
@@ -25,6 +26,7 @@ class Runtime:
 
 
 def build_runtime(settings: Settings | None = None) -> Runtime:
+    configure_langsmith()
     resolved = (settings or Settings.from_env()).with_retrieval_config(RETRIEVAL_CONFIG)
     database = Database(resolved.retail_db)
     database.initialize()
