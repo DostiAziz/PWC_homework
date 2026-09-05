@@ -11,6 +11,7 @@ services:
       PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
     volumes:
       - app-data:/app/data
+      - hf-cache:/root/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -29,6 +30,7 @@ services:
     environment: *app_environment
     volumes:
       - app-data:/app/data
+      - hf-cache:/root/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -40,7 +42,7 @@ services:
   chroma:
     image: chromadb/chroma:1.5.9
     ports:
-      - "8000:8000"
+      - "${PWC_CHROMA_PORT:-8000}:8000"
     volumes:
       - chroma-data:/data
     healthcheck:
@@ -53,3 +55,4 @@ services:
 volumes:
   app-data:
   chroma-data:
+  hf-cache:
