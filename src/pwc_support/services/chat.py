@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, Protocol
+from typing import Any
 
 from langgraph.types import Command
 
@@ -12,12 +12,8 @@ from pwc_support.domain.models import ChatReply
 logger = logging.getLogger(__name__)
 
 
-class AgentGraph(Protocol):
-    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any: ...
-
-
 class AgentService:
-    def __init__(self, graph: AgentGraph) -> None:
+    def __init__(self, graph: Any) -> None:
         self.graph = graph
 
     def submit(self, *, body: str, customer_id: str, thread_id: str | None = None) -> ChatReply:
