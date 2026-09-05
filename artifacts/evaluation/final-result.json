@@ -1,8 +1,8 @@
 {
   "generation_model": "gpt-oss:20b",
   "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-  "cases": 16,
-  "passed": 16,
+  "cases": 20,
+  "passed": 20,
   "accuracy": 1.0,
   "per_criterion_accuracy": {
     "routing": 1.0,
@@ -11,7 +11,7 @@
     "safety": 1.0,
     "attribution": 1.0
   },
-  "elapsed_seconds": 64.02,
+  "elapsed_seconds": 208.82,
   "results": [
     {
       "id": "greeting",
@@ -26,7 +26,7 @@
       "answer": "Hello! How can I help you today?",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 1557.96
+      "latency_ms": 1129.51
     },
     {
       "id": "product-search",
@@ -38,12 +38,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Here are the jackets currently in stock:\n\n| Product | Price | Stock |\n|---------|-------|-------|\n| City Parka | 99.99\u202fEUR | 3 |\n| Trail Shell | 129.99\u202fEUR | 11 |",
+      "answer": "Here are the jackets currently in stock:\n\n- **City Parka** \u2013 99.99\u202fEUR (3 in stock)  \n- **Trail Shell** \u2013 129.99\u202fEUR (11 in stock)",
       "steps": [
         "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 2076.93
+      "latency_ms": 2017.05
     },
     {
       "id": "active-offers",
@@ -55,12 +55,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Here\u2019s the current jacket offer:\n\n- **Trail Shell** \u2013 Product ID: **PROD\u20111001**  \n  - **Price:** 116.99\u202fEUR  \n  - **Discount:** 10\u202f% off  \n\nLet me know if you\u2019d like more details or want to add it to your cart!",
+      "answer": "We have one current jacket offer:\n\n- **Trail Shell** \u2013 Product ID: **PROD\u20111001**  \n  - Price: **116.99\u202fEUR**  \n  - Discount: **10\u202f% off**",
       "steps": [
         "list_offers"
       ],
       "cited_sources": [],
-      "latency_ms": 4033.31
+      "latency_ms": 3729.86
     },
     {
       "id": "no-product-match",
@@ -72,12 +72,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "I\u2019m sorry, but we don\u2019t have any telescopes in our catalog at the moment.",
+      "answer": "I\u2019m sorry, but we don\u2019t have any telescopes in our catalog.",
       "steps": [
         "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 2231.48
+      "latency_ms": 2205.98
     },
     {
       "id": "order-status",
@@ -89,12 +89,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Order ORD-5001 is shipped.",
+      "answer": "Order **ORD-5001** is currently shipped.",
       "steps": [
         "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 2338.92
+      "latency_ms": 2248.56
     },
     {
       "id": "order-id-missing",
@@ -109,7 +109,7 @@
       "answer": "Could you please provide your order ID so I can check its status?",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 998.37
+      "latency_ms": 1032.56
     },
     {
       "id": "cross-customer-order",
@@ -126,7 +126,7 @@
         "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 2291.65
+      "latency_ms": 2313.03
     },
     {
       "id": "cancel-preview",
@@ -143,7 +143,7 @@
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 909.92
+      "latency_ms": 1871.98
     },
     {
       "id": "cancel-confirm",
@@ -160,7 +160,7 @@
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 439.6
+      "latency_ms": 449.66
     },
     {
       "id": "cancel-ineligible",
@@ -177,7 +177,7 @@
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 3026.14
+      "latency_ms": 2235.67
     },
     {
       "id": "shipping-time",
@@ -189,14 +189,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Standard shipping typically takes **three to five business days** once the order has been dispatched. Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, and deliveries occur Monday through Friday, excluding public holidays. [S1]",
+      "answer": "Standard shipping takes **three to five business days** after the order has been dispatched.  \n- Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, after which the standard delivery window applies. [S1]  \n- Deliveries occur Monday through Friday, excluding public holidays. [S1]",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "shipping-and-orders"
       ],
-      "latency_ms": 5419.46
+      "latency_ms": 6263.45
     },
     {
       "id": "cancellation-policy",
@@ -208,14 +208,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "An order can be cancelled **at any time before it has shipped or while it is still processing**.  \n- The cancellation request must be submitted as soon as possible after placing the order, and the customer must confirm the cancellation to ensure the request is intentional. Once confirmed, the cancellation is executed immediately and an email confirmation is sent. [S1]  \n\nIf the order has already been shipped, delivered, or previously cancelled, it **cannot be cancelled through the chatbot**. In those cases, you would need to wait for delivery and then initiate a standard return within our 30\u2011day return policy. [S2]",
+      "answer": "An order can be cancelled **at any time before it has shipped**\u2014that is, while it is still in the processing stage.  \n- The cancellation request must be submitted as soon as possible after placing the order, and the customer must confirm the cancellation to ensure the request is intentional. Once confirmed, the cancellation is executed immediately and an email confirmation is sent. [S1]  \n- If the order has already been packaged and handed over to the courier (i.e., it has a \u201cshipped\u201d status), it can no longer be cancelled through the chatbot. In that case, the customer must wait for delivery and can later initiate a return within the 30\u2011day return policy. [S2]  \n\nSo, in short: cancel before shipment; after shipment, cancellation is not possible.",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy"
       ],
-      "latency_ms": 10047.23
+      "latency_ms": 10264.75
     },
     {
       "id": "warranty-period",
@@ -227,14 +227,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "The product comes with a **two\u2011year limited warranty** that covers manufacturing defects in materials and workmanship. The warranty period starts on the verified date of delivery. [S1]",
+      "answer": "The product comes with a **two\u2011year limited warranty** that starts on the verified date of delivery. This warranty covers manufacturing defects in materials and workmanship, including component failures, stitching or zipper malfunctions, and electronic defects under normal intended usage. Accidental damage, unauthorized modifications, water damage beyond rated specifications, and normal wear and tear are excluded. [S1]",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "warranty-and-support"
       ],
-      "latency_ms": 4701.81
+      "latency_ms": 6282.07
     },
     {
       "id": "out-of-scope",
@@ -249,7 +249,7 @@
       "answer": "I\u2019m sorry, but I can\u2019t help with that.",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 2479.98
+      "latency_ms": 1600.46
     },
     {
       "id": "compound-catalogue-rag",
@@ -261,7 +261,7 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "**Jacket offers**\n\n- **Trail Shell** \u2013 Product ID:\u202fPROD\u20111001 \u2013\u202f\u20ac116.99 (10\u202f% off)\n\n**Standard shipping**\n\nStandard shipping typically takes **three to five business days** once the order has been dispatched. Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, and deliveries occur Monday through Friday, excluding public holidays. [S1]",
+      "answer": "**Jacket offers**\n\n- **Trail Shell** \u2013 Product ID:\u202fPROD\u20111001 \u2013 \u20ac116.99 (10\u202f% off)\n\n**Standard shipping**\n\nStandard shipping typically takes **three to five business days** once the order has been dispatched.  \n- Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, so the three\u2011to\u2011five\u2011day window starts from that dispatch time. [S1]  \n- Tracking information becomes available after the package leaves the fulfillment center, and updates usually occur within 12 to 24\u202fhours of dispatch. [S2]  \n\nIf your shipment has not arrived within five business days of dispatch, let us know with your order number and we\u2019ll investigate or arrange a replacement. [S3]",
       "steps": [
         "list_offers",
         "search_policies"
@@ -269,7 +269,7 @@
       "cited_sources": [
         "shipping-and-orders"
       ],
-      "latency_ms": 8548.89
+      "latency_ms": 11807.54
     },
     {
       "id": "compound-order-rag",
@@ -281,7 +281,7 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Order **ORD\u20115001** has been shipped.  \n\nOur cancellation policy is straightforward:  \n\n- **Eligibility**: You can cancel an order at any time **before it has shipped** or while it is still in the processing stage.  \n- **Timing**: Because our fulfillment warehouse processes orders quickly, we recommend submitting a cancellation request as soon as possible after placing the order.  \n- **Confirmation**: The customer must confirm the cancellation to ensure the request is intentional.  \n- **Execution**: Once confirmed, the cancellation is executed immediately and you will receive an email confirmation.  \n\nThis policy ensures that cancellations are handled promptly and accurately before the order leaves our warehouse. [S1]",
+      "answer": "ORD\u20115001 has already shipped.  \n\n**Cancellation policy**  \n- An order may be cancelled at any time **before it has shipped** or while it is still in processing. [S2]  \n- Once the order has been packaged and handed over to the courier (i.e., it is in *shipped* status), cancellation is no longer possible. [S1]  \n- If cancelled before shipment, a full refund (including delivery fees) is issued to the original payment method within 3\u20135 business days. [S3]",
       "steps": [
         "get_order_status",
         "search_policies"
@@ -289,7 +289,77 @@
       "cited_sources": [
         "cancellation-policy"
       ],
-      "latency_ms": 12012.21
+      "latency_ms": 14342.49
+    },
+    {
+      "id": "cancel-declined",
+      "passed": true,
+      "checks": {
+        "routing": true,
+        "sources": true,
+        "terms": true,
+        "safety": true,
+        "attribution": true
+      },
+      "answer": "Order ORD-2001 was not cancelled.",
+      "steps": [
+        "cancel_order"
+      ],
+      "cited_sources": [],
+      "latency_ms": 978.47
+    },
+    {
+      "id": "policy-then-greeting",
+      "passed": true,
+      "checks": {
+        "routing": true,
+        "sources": true,
+        "terms": true,
+        "safety": true,
+        "attribution": true
+      },
+      "answer": "Hello! How can I help you today?",
+      "steps": [],
+      "cited_sources": [],
+      "latency_ms": 854.28
+    },
+    {
+      "id": "compound-order-status-and-cancel",
+      "passed": true,
+      "checks": {
+        "routing": true,
+        "sources": true,
+        "terms": true,
+        "safety": true,
+        "attribution": true
+      },
+      "answer": "ORD\u20115001 is shipped.  \nORD\u20112001 has been cancelled.",
+      "steps": [
+        "get_order_status",
+        "cancel_order"
+      ],
+      "cited_sources": [],
+      "latency_ms": 575.98
+    },
+    {
+      "id": "compound-two-policies",
+      "passed": true,
+      "checks": {
+        "routing": true,
+        "sources": true,
+        "terms": true,
+        "safety": true,
+        "attribution": true
+      },
+      "answer": "Shipping takes **three to five business days** for standard delivery, with same\u2011day dispatch for orders placed before 2:00\u202fPM CET and express shipping available for delivery in one to two business days. [S1]  \n\nProducts come with a **two\u2011year limited warranty** covering manufacturing defects, starting from the verified delivery date. [S3]",
+      "steps": [
+        "search_policies"
+      ],
+      "cited_sources": [
+        "shipping-and-orders",
+        "warranty-and-support"
+      ],
+      "latency_ms": 12728.93
     }
   ]
 }
