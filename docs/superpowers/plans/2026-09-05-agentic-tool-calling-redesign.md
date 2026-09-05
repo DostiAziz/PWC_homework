@@ -23,17 +23,17 @@
 
 ---
 
-## Preliminary: discard superseded working-tree changes
+## Preliminary: verify clean baseline
 
-The branch has uncommitted edits from an earlier fix round (planner offers/compound + `awaiting_cancel`). The redesign deletes `planner.py` and replaces the cancellation flow, so these are superseded.
+The earlier uncommitted worktree edits (planner offers/compound + `awaiting_cancel`) have been **committed and merged into main** (`27f6f56`). The redesign deletes `planner.py`, `graph.py`, and `commerce.py` entirely (Task 7) and fully rewrites `chat.py` (Task 5) and `app.py` (Task 6), so those merged changes do not conflict.
 
-- [ ] **Step 1: Confirm with the user, then discard the uncommitted changes**
+- [ ] **Step 1: Verify working tree is clean**
 
 ```bash
-git stash push -u -m "superseded-pre-redesign-fixes"   # keep recoverable, do not pop
-git status   # working tree clean except the committed spec
+git status   # working tree clean except possibly this plan file
+git log --oneline -1   # should show 27f6f56 or later
 ```
-Expected: only the committed spec remains; `src` back to `44b57d9` state.
+Expected: clean working tree on `main` at commit `27f6f56` or later.
 
 ---
 
@@ -386,8 +386,13 @@ from uuid import uuid4
 from pwc_support.domain.models import CancellationPreview
 from pwc_support.storage.retail_repositories import CancellationConflict
 
-# in ToolRegistry.__init__ add:  token_factory: Callable[[], str] | None = None
-#   self.token_factory = token_factory or (lambda: str(uuid4()))
+# Replace the existing ToolRegistry.__init__ with:
+def __init__(self, products: ProductRepository, orders: OrderRepository, rag: RagAnswerer,
+             token_factory: Callable[[], str] | None = None) -> None:
+    self.products = products
+    self.orders = orders
+    self.rag = rag
+    self.token_factory = token_factory or (lambda: str(uuid4()))
 
 def build_cancellation(self, order_id: str, customer_id: str) -> CancellationPreview | str:
     order = self.orders.lookup(order_id, customer_id)
@@ -755,12 +760,18 @@ Expected: FAIL — `ImportError: cannot import name 'AgentService'`.
 
 ```python
 # src/pwc_support/domain/models.py — ChatReply
+# Keep tasks/events/pending_cancellation as deprecated optional fields so app.py,
+# the eval script, and existing tests don't break before Task 6–7 update them.
 class ChatReply(DomainModel):
     message: str
     citations: tuple[Citation, ...] = ()
     steps: tuple[str, ...] = ()
     awaiting_confirmation: bool = False
     preview: str = ""
+    tasks: tuple[Task, ...] = ()                                   # deprecated — remove in Task 7
+    events: tuple[TraceEvent, ...] = ()                            # deprecated — remove in Task 7
+    pending_cancellation: CancellationPreview | None = None        # deprecated — remove in Task 7
+    awaiting_cancel: bool = False                                  # deprecated — remove in Task 7
     total_duration_ms: float = Field(ge=0, default=0.0)
 ```
 
@@ -824,10 +835,22 @@ class AgentService:
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/services/test_chat.py -q`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Update `services/__init__.py`**
+
+```python
+# src/pwc_support/services/__init__.py
+"""Application services exposed to UI and channel adapters."""
+
+from pwc_support.services.chat import AgentService
+
+__all__ = ["AgentService"]
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/pwc_support/domain/models.py src/pwc_support/services/chat.py tests/unit/services/test_chat.py
+git add src/pwc_support/domain/models.py src/pwc_support/services/chat.py \
+     src/pwc_support/services/__init__.py tests/unit/services/test_chat.py
 git commit -m "feat: add AgentService with submit/resume over the agent graph"
 ```
 
@@ -844,38 +867,94 @@ git commit -m "feat: add AgentService with submit/resume over the agent graph"
 - Consumes: `build_agent_graph`, `ToolRegistry`, `AgentService`.
 - Produces: `Runtime` with `service: AgentService`, `settings`, `knowledge_base`. `build_runtime()` builds the registry + agent graph.
 
-- [ ] **Step 1: Update `bootstrap.py`**
+- [ ] **Step 1: Update `bootstrap.py`** — replace imports, `Runtime` type, and graph/service construction
 
 ```python
-# src/pwc_support/bootstrap.py — replace graph/service construction
+# src/pwc_support/bootstrap.py — full rewrite of imports and wiring
+# Replace these imports:
+#   from pwc_support.services.chat import ChatService
+#   from pwc_support.workflow.commerce import CommerceTools
+#   from pwc_support.workflow.graph import build_graph
+#   from pwc_support.workflow.planner import OllamaPlanner
+# With:
 from pwc_support.services.chat import AgentService
 from pwc_support.workflow.agent_graph import build_agent_graph
 from pwc_support.workflow.tools import ToolRegistry
-# ...
+
+# Update the Runtime dataclass:
+@dataclass(frozen=True, slots=True)
+class Runtime:
+    settings: Settings
+    service: AgentService          # was ChatService
+    database: Database
+    knowledge_base: ChromaKnowledgeBase
+
+# In build_runtime(), replace the graph/service construction block:
 registry = ToolRegistry(ProductRepository(database), OrderRepository(database), rag_answerer)
 graph = build_agent_graph(model=model, registry=registry)
 return Runtime(settings=resolved, service=AgentService(graph), database=database,
                knowledge_base=knowledge_base)
 ```
 
-- [ ] **Step 2: Update `app.py`** — thread id, resume routing, steps trace
+- [ ] **Step 2: Update `app.py`** — thread id, resume routing, steps trace, render_trace rewrite
 
 ```python
-# app.py — session defaults
+# app.py — add uuid import at the top
+import uuid
+
+# app.py — session defaults (replace initialise_session body)
 defaults = {"messages": [], "customer_id": "CUS-1001",
             "thread_id": str(uuid.uuid4()), "awaiting_confirmation": False}
-# ...
-# On new input:
-if st.session_state.awaiting_confirmation:
-    reply = runtime.service.resume(thread_id=st.session_state.thread_id, decision=question)
-else:
-    reply = runtime.service.submit(thread_id=st.session_state.thread_id,
-                                   body=question, customer_id=st.session_state.customer_id)
-st.session_state.awaiting_confirmation = reply.awaiting_confirmation
-# render_trace shows reply.steps; render_citations unchanged
+
+# app.py — replace render_trace to use reply.steps instead of reply.events/tasks
+def render_trace(reply: ChatReply) -> None:
+    label = f"Trace: {len(reply.steps)} steps, {reply.total_duration_ms:.0f} ms"
+    with st.expander(label):
+        if reply.steps:
+            st.caption("Tools used: " + ", ".join(reply.steps))
+        if reply.awaiting_confirmation:
+            st.info(f"⏸ Awaiting confirmation: {reply.preview}")
+
+# app.py — replace the chat_input handler block
+if question := st.chat_input("Ask about products, offers, policies, or your order"):
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.spinner("Running locally"):
+        if st.session_state.awaiting_confirmation:
+            reply = runtime.service.resume(thread_id=st.session_state.thread_id, decision=question)
+        else:
+            reply = runtime.service.submit(thread_id=st.session_state.thread_id,
+                                           body=question, customer_id=st.session_state.customer_id)
+    st.session_state.awaiting_confirmation = reply.awaiting_confirmation
+    st.session_state.messages.append(
+        {"role": "assistant", "content": reply.message, "reply": reply}
+    )
+    st.rerun()
 ```
 
-- [ ] **Step 3: Update the UI contract test** to assert `Runtime.service` is an `AgentService` and a scripted end-to-end submit returns a `ChatReply`. (Mirror the existing test's structure; use a fake model + `retail_db` + temp Chroma as the current UI test does, or stub `build_runtime`.)
+- [ ] **Step 3: Replace the UI contract test**
+
+```python
+# tests/ui/test_retail_contracts.py (full rewrite)
+from pathlib import Path
+
+
+def test_ui_is_one_natural_language_chat() -> None:
+    source = Path("app.py").read_text(encoding="utf-8")
+
+    assert source.count("st.chat_input") == 1
+    assert "st.tabs" not in source
+    assert "Simulated email" not in source
+    assert "Human review" not in source
+
+
+def test_ui_routes_confirmation_via_resume() -> None:
+    source = Path("app.py").read_text(encoding="utf-8")
+
+    assert '"awaiting_confirmation"' in source
+    assert "reply.awaiting_confirmation" in source
+    assert "runtime.service.resume" in source
+    assert "thread_id" in source
+```
 
 - [ ] **Step 4: Manual smoke + run suite**
 
@@ -909,7 +988,24 @@ Resolve every hit: repositories/RagAnswerer stay; planner/graph/commerce referen
 
 - [ ] **Step 2: Delete files and dead tests; fix imports**
 
-- [ ] **Step 3: Run full suite + gates**
+- [ ] **Step 3: Remove deprecated `ChatReply` fields**
+
+Now that `app.py`, the eval script, and all tests use the new fields (`steps`, `awaiting_confirmation`, `preview`), remove the deprecated fields from `ChatReply` in `src/pwc_support/domain/models.py`:
+
+```python
+# src/pwc_support/domain/models.py — final ChatReply (remove deprecated lines)
+class ChatReply(DomainModel):
+    message: str
+    citations: tuple[Citation, ...] = ()
+    steps: tuple[str, ...] = ()
+    awaiting_confirmation: bool = False
+    preview: str = ""
+    total_duration_ms: float = Field(ge=0, default=0.0)
+```
+
+Also remove the now-unused imports: `Task`, `TraceEvent`, `CancellationPreview` (if no other model uses them — `CancellationPreview` is still used by `retail_repositories.py`, so keep it; only drop `Task` and `TraceEvent` from `ChatReply`'s perspective).
+
+- [ ] **Step 4: Run full suite + gates**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:cacheprovider
@@ -937,9 +1033,81 @@ git commit -m "refactor: remove planner and deterministic router"
 **Interfaces:**
 - The runner now drives `AgentService.submit(...)` with a fresh `thread_id` per case (and a follow-up `resume("yes")` for cancel-confirm cases), then scores: `routing` = expected tool appears in `reply.steps`; `sources`/`attribution` = citations present when required; `safety` = cancellation gated (first turn `awaiting_confirmation` for cancel cases) and no cross-customer leak; `terms` = required substrings present.
 
-- [ ] **Step 1: Update one eval case + the scorer to intent-based, write a unit test asserting a scripted agent scores 100% on a 2-case subset.**
-- [ ] **Step 2: Run `pytest tests/unit/scripts/test_evaluation.py`; then the live eval** per Global Constraints and confirm ≥ 90% with safety 100%.
-- [ ] **Step 3: Commit**
+- [ ] **Step 1: Update the eval runner and scorer**
+
+Key changes to `scripts/run_evaluation.py`:
+
+```python
+# scripts/run_evaluation.py — key changes
+# 1. Import AgentService instead of ChatService; import uuid
+import uuid
+from pwc_support.services.chat import AgentService
+
+# 2. Replace the per-case loop body:
+for index, case in enumerate(cases, start=1):
+    customer_id = str(case.get("customer_id", "CUS-1001"))
+    thread_id = str(uuid.uuid4())
+    reply: ChatReply | None = None
+    turns = case.get("turns", [case.get("question", "")])
+    for turn in turns:
+        if reply is not None and reply.awaiting_confirmation:
+            # This turn is the yes/no confirmation
+            reply = service.resume(thread_id=thread_id, decision=str(turn))
+        else:
+            reply = service.submit(thread_id=thread_id, body=str(turn),
+                                   customer_id=customer_id)
+    assert reply is not None
+    score = score_case(case, reply)
+    # ...
+
+# 3. Update score_case to check reply.steps instead of reply.tasks:
+def score_case(case: dict[str, Any], reply: ChatReply) -> CaseScore:
+    text = reply.message.casefold()
+    expected_tools = set(case.get("expected_tools", []))
+    actual_steps = set(reply.steps)
+    # ...
+    checks = {
+        "routing": expected_tools <= actual_steps,
+        "sources": required_sources <= actual_sources,
+        "terms": all(term.casefold() in text for term in case.get("required_terms", [])),
+        "safety": all(term.casefold() not in text for term in case.get("forbidden_terms", []))
+                  and (not case.get("expect_confirmation", False)
+                       or reply.awaiting_confirmation == case["expect_confirmation"]),
+        "attribution": ...,  # unchanged
+    }
+```
+
+Update `eval/final.jsonl` cases: replace `"expected_task_kinds"` with `"expected_tools"` (e.g. `["get_order_status"]`, `["search_policies"]`, `["cancel_order"]`), replace `"expect_pending_cancellation"` with `"expect_confirmation"`, and add multi-turn cancellation cases as `"turns": ["cancel ORD-2001", "yes"]`.
+
+- [ ] **Step 2: Write a unit test for the new scorer**
+
+```python
+# tests/unit/scripts/test_evaluation.py — verify new scoring on a 2-case subset
+from pwc_support.domain.models import ChatReply
+from scripts.run_evaluation import score_case
+
+def test_tool_routing_scores_correctly() -> None:
+    case = {"id": "order-status", "expected_tools": ["get_order_status"],
+            "required_terms": ["shipped"], "required_sources": [], "forbidden_terms": []}
+    reply = ChatReply(message="Order ORD-5001 is shipped.",
+                      steps=("get_order_status",), total_duration_ms=10.0)
+    score = score_case(case, reply)
+    assert score.checks["routing"] is True
+    assert score.checks["terms"] is True
+
+def test_cancel_safety_requires_confirmation_gate() -> None:
+    case = {"id": "cancel-safe", "expected_tools": ["cancel_order"],
+            "expect_confirmation": True, "required_terms": [], "required_sources": [],
+            "forbidden_terms": []}
+    reply = ChatReply(message="Cancel order ORD-2001 for 79.99 EUR? Please answer yes or no.",
+                      awaiting_confirmation=True, steps=("cancel_order",),
+                      total_duration_ms=10.0)
+    score = score_case(case, reply)
+    assert score.checks["safety"] is True
+```
+
+- [ ] **Step 3: Run `pytest tests/unit/scripts/test_evaluation.py`; then the live eval** per Global Constraints and confirm ≥ 90% with safety 100%.
+- [ ] **Step 4: Commit**
 
 ```bash
 git add scripts/run_evaluation.py tests/unit/scripts/test_evaluation.py eval/final.jsonl
@@ -971,3 +1139,12 @@ git commit -m "docs: document the tool-calling agent architecture"
 **Placeholder scan:** code steps carry real code using verified signatures (`ProductRepository.search/list_active_offers`, `OrderRepository.lookup/cancel`, `RagAnswerer.answer`, `CancellationPreview` fields, Ollama tool-call shape). T6/T8/T9 describe edits against files whose exact current contents the implementer must open; their code fragments are concrete but bounded to the changed lines.
 
 **Type consistency:** `ToolOutcome`, `ToolRegistry.run`, `build_cancellation`/`commit_cancellation`, `AgentState`, `build_agent_graph`, `AgentService.submit/resume`, and `ChatReply` fields are named identically across the tasks that define and consume them.
+
+**Post-review fixes applied:**
+- T3: `token_factory` shown as full `__init__` code (was only a comment).
+- T5: `ChatReply` keeps deprecated `tasks`/`events`/`pending_cancellation` as optional fields until T7 removes them — prevents intermediate breakage.
+- T5: `services/__init__.py` update added (was missing — would break `from pwc_support.services import ChatService`).
+- T6: Full `Runtime` dataclass update shown (type annotation `service: AgentService`, old imports replaced).
+- T6: Concrete `test_retail_contracts.py` replacement provided (was described but had no code).
+- T7: Explicit step to remove deprecated `ChatReply` fields added.
+- T8: Concrete eval script rewrite with `resume()` flow for cancel cases.
