@@ -86,13 +86,20 @@ class ToolRegistry:
         order = self.orders.lookup(order_id, customer_id)
         if order is None:
             return "I could not find that order for this customer."
-        if order.fulfilment_status != "processing" or order.status not in {"processing", "paid"}:
-            reason = (
-                "because it has already shipped"
-                if order.fulfilment_status in {"shipped", "delivered"}
-                else "in its current state"
+        if order.status == "cancelled" or order.fulfilment_status == "cancelled":
+            return (
+                f"Order {order.order_id} cannot be cancelled because it has already been cancelled."
             )
-            return f"Order {order.order_id} cannot be cancelled {reason}."
+        if order.fulfilment_status == "delivered" or order.status == "delivered":
+            return (
+                f"Order {order.order_id} cannot be cancelled because it has already been delivered."
+            )
+        if order.fulfilment_status == "shipped" or order.status == "shipped":
+            return f"Order {order.order_id} cannot be cancelled because it has already shipped."
+        if order.fulfilment_status != "processing" or order.status not in {"processing", "paid"}:
+            return (
+                f"Order {order.order_id} cannot be cancelled in its current state ({order.status})."
+            )
         return CancellationPreview(
             confirmation_token=self.token_factory(),
             order_id=order.order_id,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from operator import add
 from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -45,9 +45,10 @@ def build_agent_graph(
             isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
             for m in state.get("messages", [])
         )
-        if has_system:
-            return {}
-        return {"messages": [SystemMessage(content=SYSTEM_PROMPT)]}
+        updates: dict[str, Any] = {"iterations": 0}
+        if not has_system:
+            updates["messages"] = [SystemMessage(content=SYSTEM_PROMPT)]
+        return updates
 
     def agent(state: AgentState) -> dict[str, Any]:
         msgs = list(state["messages"])
@@ -136,9 +137,15 @@ def build_agent_graph(
         }
 
     def respond(state: AgentState) -> dict[str, Any]:
+        msgs = state.get("messages", [])
+        last_user_idx = -1
+        for i, m in enumerate(msgs):
+            if isinstance(m, HumanMessage) or (isinstance(m, dict) and m.get("role") == "user"):
+                last_user_idx = i
+        current_msgs = msgs[last_user_idx + 1 :] if last_user_idx >= 0 else msgs
         answers = [
             m.content
-            for m in state["messages"]
+            for m in current_msgs
             if (isinstance(m, AIMessage) and m.content)
             or (isinstance(m, dict) and m.get("role") == "assistant" and m.get("content"))
         ]
