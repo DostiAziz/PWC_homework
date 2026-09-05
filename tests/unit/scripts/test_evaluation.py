@@ -85,3 +85,14 @@ def test_score_case_valid_citation() -> None:
     score = score_case(case, reply)
     assert score.passed
     assert all(score.checks.values())
+
+
+def test_score_case_enforces_explicit_false_confirmation() -> None:
+    case = {"id": "must-not-pause", "expect_confirmation": False}
+    reply = ChatReply(
+        message="Confirm?",
+        awaiting_confirmation=True,
+        status="awaiting_confirmation",
+    )
+    assert score_case(case, reply).checks["safety"] is False
+

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from langgraph.types import Command
 
 from domain.models import ChatReply
+from observability import get_timing_spans, record_span, trace_request
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,11 @@ class AgentService:
                 )
             self._thread_owners[tid] = customer_id
             payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
-            return self._run(payload, tid)
+            req_id = str(uuid.uuid4())
+            with trace_request(req_id):
+                with record_span("agent.submit"):
+                    reply = self._run(payload, tid)
+                return reply.model_copy(update={"request_id": req_id, "spans": get_timing_spans()})
 
     def resume(self, *, thread_id: str, customer_id: str, decision: str) -> ChatReply:
         with self._get_lock(thread_id):
@@ -62,7 +67,11 @@ class AgentService:
                     message="Access denied: conversation belongs to another customer.",
                     status="invalid_request",
                 )
-            return self._run(Command(resume=decision), thread_id)
+            req_id = str(uuid.uuid4())
+            with trace_request(req_id):
+                with record_span("agent.resume"):
+                    reply = self._run(Command(resume=decision), thread_id)
+                return reply.model_copy(update={"request_id": req_id, "spans": get_timing_spans()})
 
     def _run(self, payload: Any, thread_id: str) -> ChatReply:
         started = time.perf_counter()
@@ -113,6 +122,3 @@ class AgentService:
     @staticmethod
     def _ms(started: float) -> float:
         return round((time.perf_counter() - started) * 1000, 2)
-
-
-ChatService = AgentService

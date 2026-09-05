@@ -6,15 +6,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
 from llm.embeddings import (
-    HuggingFaceEmbedder,
     embedding_dimension,
     validate_collection_dimension,
 )
 from llm.ollama import (
-    ChatOpenAIAdapter,
-    OllamaGateway,
+    LimitedChatModel,
     OllamaUnavailable,
-    StructuredOutputInvalid,
     get_chat_model,
 )
 
@@ -39,7 +36,7 @@ class FakeChatModel:
         self.bound_tools: list[dict[str, Any]] | None = None
         self.captured_messages: list[BaseMessage] = []
 
-    def invoke(self, messages: list[BaseMessage]) -> Any:
+    def invoke(self, messages: list[BaseMessage], config: Any = None, **kwargs: Any) -> Any:
         if isinstance(self.response, Exception):
             raise self.response
         self.captured_messages = list(messages)
@@ -61,91 +58,43 @@ class FakeEmbeddingsBackend:
         self.calls.append(texts)
         return [[1.0, 0.0] for _ in texts]
 
-
-def test_structured_generation_returns_validated_model() -> None:
-    fake_llm = FakeChatModel()
-    gateway = ChatOpenAIAdapter(llm=fake_llm)
-
-    output = gateway.structured(system="Classify", user="offers", schema=Output)
-
-    assert isinstance(output, Output)
-    assert output.route == "catalogue"
+    def embed_query(self, text: str) -> list[float]:
+        return [1.0, 0.0]
 
 
-def test_text_generation_returns_string() -> None:
+def test_limited_chat_model_invoke_returns_ai_message() -> None:
     fake_llm = FakeChatModel(response=AIMessage(content="Order shipped."))
-    gateway = ChatOpenAIAdapter(llm=fake_llm)
+    model = LimitedChatModel(fake_llm)
 
-    assert gateway.text(system="System", user="Where is ORD-1?") == "Order shipped."
-    assert len(fake_llm.captured_messages) == 2
+    response = model.invoke([HumanMessage(content="Where is ORD-1?")])
 
-
-def test_transport_error_raises_ollama_unavailable() -> None:
-    fake_llm = FakeChatModel(response=RuntimeError("connection refused"))
-    gateway = ChatOpenAIAdapter(llm=fake_llm)
-
-    with pytest.raises(OllamaUnavailable, match="LLM request failed"):
-        gateway.text(system="System", user="Hello")
+    assert response.content == "Order shipped."
+    assert len(fake_llm.captured_messages) == 1
 
 
-def test_invalid_structured_output_raises_structured_output_invalid() -> None:
-    class FailingFake(FakeChatModel):
-        def with_structured_output(self, schema: type[Any]) -> Any:
-            return FakeStructuredModel({"invalid_field": "unknown"})
+def test_limited_chat_model_bind_tools_propagates() -> None:
+    fake_llm = FakeChatModel()
+    model = LimitedChatModel(fake_llm)
+    tools = [{"type": "function", "function": {"name": "test_tool"}}]
 
-    gateway = ChatOpenAIAdapter(llm=FailingFake())
-
-    with pytest.raises(StructuredOutputInvalid):
-        gateway.structured(system="Classify", user="offers", schema=Output)
-
-
-def test_chat_with_tools_returns_ai_message() -> None:
-    response = AIMessage(
-        content="",
-        tool_calls=[{"name": "get_order_status", "args": {"order_id": "ORD-1"}, "id": "c1"}],
-    )
-    fake_llm = FakeChatModel(response=response)
-    gw = OllamaGateway(llm=fake_llm)
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_order_status",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"order_id": {"type": "string"}},
-                },
-            },
-        }
-    ]
-
-    msg = gw.chat_with_tools(messages=[HumanMessage(content="where is ORD-1")], tools=tools)
-
-    assert msg.tool_calls[0]["name"] == "get_order_status"
-    assert msg.tool_calls[0]["args"] == {"order_id": "ORD-1"}
-    assert msg.tool_calls[0]["id"] == "c1"
+    bound = model.bind_tools(tools)
+    assert isinstance(bound, LimitedChatModel)
     assert fake_llm.bound_tools == tools
 
 
-def test_hugging_face_embedder_wraps_backend() -> None:
-    fake_backend = FakeEmbeddingsBackend()
-    embedder = HuggingFaceEmbedder(embeddings_instance=fake_backend)
+def test_limited_chat_model_times_out_when_concurrency_saturated() -> None:
+    backend = EventControlledModel()
+    model = LimitedChatModel(backend, max_parallel_generations=1, acquisition_timeout_seconds=0.01)
 
-    results = embedder.embed(["test doc 1", "test doc 2"])
+    first = Thread(target=model.invoke, args=([HumanMessage(content="one")],))
+    first.start()
+    assert backend.entered.wait(timeout=1)
 
-    assert len(results) == 2
-    assert results[0] == [1.0, 0.0]
-    assert fake_backend.calls == [["test doc 1", "test doc 2"]]
+    with pytest.raises(OllamaUnavailable, match="Timed out waiting"):
+        model.invoke([HumanMessage(content="two")])
 
-
-def test_chat_openai_adapter_embed_delegates_to_embedder() -> None:
-    fake_backend = FakeEmbeddingsBackend()
-    embedder = HuggingFaceEmbedder(embeddings_instance=fake_backend)
-    gw = ChatOpenAIAdapter(llm=FakeChatModel(), embedder=embedder)
-
-    results = gw.embed(["sample"])
-
-    assert results == [[1.0, 0.0]]
+    backend.release.set()
+    first.join(timeout=2)
 
 
 def test_factory_applies_output_budget_and_finite_retries() -> None:
@@ -238,6 +187,6 @@ def test_embedding_diagnostic_rejects_incompatible_collection() -> None:
     with pytest.raises(ValueError, match=r"expected 768 dimensions.*produced 2.*rebuild"):
         validate_collection_dimension(
             Collection(),
-            embedding_dimension(HuggingFaceEmbedder(embeddings_instance=FakeEmbeddingsBackend())),
+            embedding_dimension(FakeEmbeddingsBackend()),
             model_name="sentence-transformers/all-MiniLM-L6-v2",
         )
