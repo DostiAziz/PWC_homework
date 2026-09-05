@@ -9,7 +9,7 @@ def test_defaults_point_to_new_retail_database(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path)
 
     assert settings.retail_db == tmp_path / "state" / "retail-support-v1.sqlite3"
-    assert settings.collection_name == "customer_support_v1_hf_384_cosine"
+    assert settings.collection_name == "retail_support_v1_hf_384_cosine"
     assert settings.generation_model == "gpt-oss:20b"
     assert settings.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
 

@@ -17,7 +17,7 @@ class Settings(BaseModel):
     chroma_mode: Literal["persistent", "http"] = "persistent"
     chroma_host: str = "127.0.0.1"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
-    collection_name: str = "customer_support_v1_hf_384_cosine"
+    collection_name: str = "retail_support_v1_hf_384_cosine"
     num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
     schema_tokens: int = Field(default=1024, ge=64, le=4096)
