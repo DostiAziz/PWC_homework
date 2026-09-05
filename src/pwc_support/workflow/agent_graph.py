@@ -19,8 +19,9 @@ SYSTEM_PROMPT = (
     "relevant details such as prices and order numbers. Only answer policy questions from the "
     "search_policies tool result, keeping its [S1] citation markers verbatim; never state "
     "policy from your own knowledge. If an order is not found, state that you could not find "
-    "the order. To cancel an order, call cancel_order; the system will ask the customer to "
-    "confirm. Be concise."
+    "the order. When an order is cancelled, state that the order has been cancelled. "
+    "To cancel an order, call cancel_order; the system will ask the customer to confirm. "
+    "Be concise."
 )
 
 

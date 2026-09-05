@@ -130,7 +130,8 @@ class ToolRegistry:
         offers = self.products.list_active_offers(query=args.get("category"))
         body = (
             "\n".join(
-                f"{o.name} ({o.product_id}): {o.effective_price} {o.currency}, {o.description}"
+                f"Product: {o.name} | Product ID: {o.product_id} | "
+                f"Price: {o.effective_price} {o.currency} | Discount: {o.description}"
                 for o in offers
             )
             or "No active offers matched your request."
