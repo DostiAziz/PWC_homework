@@ -69,14 +69,14 @@ class LimitedChatModel:
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Any:
-        with record_span("generation.queue"):
+        with record_span("generation.queue", run_type="chain"):
             acquired = self._limiter.acquire(timeout=self._acquisition_timeout_seconds)
             if not acquired:
                 raise OllamaUnavailable(
                     "Timed out waiting for an available local generation slot"
                 )
         try:
-            with record_span("generation.invoke"):
+            with record_span("generation.invoke", run_type="llm"):
                 if config is not None:
                     return self.backend.invoke(messages, config=config, **kwargs)
                 return self.backend.invoke(messages, **kwargs)

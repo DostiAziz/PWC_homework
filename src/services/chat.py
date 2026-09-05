@@ -49,9 +49,13 @@ class AgentService:
             self._thread_owners[tid] = customer_id
             payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
             req_id = str(uuid.uuid4())
-            with trace_request(req_id):
-                with record_span("agent.submit"):
-                    reply = self._run(payload, tid)
+            with trace_request(req_id, metadata={"customer_id": customer_id, "thread_id": tid}):
+                with record_span(
+                    "agent.submit",
+                    run_type="chain",
+                    metadata={"customer_id": customer_id, "thread_id": tid},
+                ):
+                    reply = self._run(payload, tid, request_id=req_id, customer_id=customer_id)
                 return reply.model_copy(update={"request_id": req_id, "spans": get_timing_spans()})
 
     def resume(self, *, thread_id: str, customer_id: str, decision: str) -> ChatReply:
@@ -68,14 +72,41 @@ class AgentService:
                     status="invalid_request",
                 )
             req_id = str(uuid.uuid4())
-            with trace_request(req_id):
-                with record_span("agent.resume"):
-                    reply = self._run(Command(resume=decision), thread_id)
+            with trace_request(
+                req_id, metadata={"customer_id": customer_id, "thread_id": thread_id}
+            ):
+                with record_span(
+                    "agent.resume",
+                    run_type="chain",
+                    metadata={"customer_id": customer_id, "thread_id": thread_id},
+                ):
+                    reply = self._run(
+                        Command(resume=decision),
+                        thread_id,
+                        request_id=req_id,
+                        customer_id=customer_id,
+                    )
                 return reply.model_copy(update={"request_id": req_id, "spans": get_timing_spans()})
 
-    def _run(self, payload: Any, thread_id: str) -> ChatReply:
+    def _run(
+        self,
+        payload: Any,
+        thread_id: str,
+        *,
+        request_id: str = "",
+        customer_id: str = "",
+    ) -> ChatReply:
         started = time.perf_counter()
-        config = {"configurable": {"thread_id": thread_id}}
+        config: dict[str, Any] = {
+            "configurable": {"thread_id": thread_id},
+            "metadata": {
+                "thread_id": thread_id,
+                "customer_id": customer_id,
+                "request_id": request_id,
+            },
+            "tags": ["retail-support"],
+            "run_name": "agent.submit" if not isinstance(payload, Command) else "agent.resume",
+        }
         try:
             terminal = self.graph.invoke(payload, config)
         except Exception:
