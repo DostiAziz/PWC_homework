@@ -9,7 +9,7 @@ from typing import Any, Literal
 from langgraph.types import Command
 
 from domain.models import ChatReply
-from observability import get_timing_spans, record_span, trace_request
+from observability import get_timing_spans, record_span, trace_request, traceable
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class AgentService:
                 self._thread_locks[thread_id] = Lock()
             return self._thread_locks[thread_id]
 
+    @traceable(name="AgentService.submit", run_type="chain")
     def submit(self, *, body: str, customer_id: str, thread_id: str | None = None) -> ChatReply:
         tid = thread_id or str(uuid.uuid4())
         with self._get_lock(tid):
@@ -58,6 +59,7 @@ class AgentService:
                     reply = self._run(payload, tid, request_id=req_id, customer_id=customer_id)
                 return reply.model_copy(update={"request_id": req_id, "spans": get_timing_spans()})
 
+    @traceable(name="AgentService.resume", run_type="chain")
     def resume(self, *, thread_id: str, customer_id: str, decision: str) -> ChatReply:
         with self._get_lock(thread_id):
             owner = self._thread_owners.get(thread_id)

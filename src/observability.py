@@ -44,26 +44,53 @@ current_trace: contextvars.ContextVar[TraceContext | None] = contextvars.Context
 
 def is_tracing_enabled() -> bool:
     """Return True if LangSmith tracing is active and an API key is provided."""
-    tracing = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() in ("true", "1", "yes")
-    api_key = os.getenv("LANGCHAIN_API_KEY", "").strip()
+    langsmith_val = os.getenv("LANGSMITH_TRACING")
+    langchain_val = os.getenv("LANGCHAIN_TRACING_V2")
+    tracing = (
+        (langsmith_val is not None and langsmith_val.lower() in ("true", "1", "yes"))
+        or (langchain_val is not None and langchain_val.lower() in ("true", "1", "yes"))
+    )
+    api_key = (os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "").strip()
     return bool(tracing and api_key)
 
 
 def configure_langsmith() -> None:
-    """Validate and configure LangSmith environment settings.
+    """Validate and synchronize LangSmith environment settings.
 
-    If LANGCHAIN_TRACING_V2 is enabled but LANGCHAIN_API_KEY is not set or empty,
-    temporarily disable remote ingestion to prevent noisy 401 warnings until the user
-    configures their key.
+    Synchronizes LANGSMITH_* and LANGCHAIN_* environment variables.
+    If tracing is enabled but no API key is set, disables remote trace submission
+    to prevent noisy 401 warnings until configured.
     """
-    tracing = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() in ("true", "1", "yes")
-    api_key = os.getenv("LANGCHAIN_API_KEY", "").strip()
+    langsmith_val = os.getenv("LANGSMITH_TRACING")
+    langchain_val = os.getenv("LANGCHAIN_TRACING_V2")
+    tracing = (
+        (langsmith_val is not None and langsmith_val.lower() in ("true", "1", "yes"))
+        or (langchain_val is not None and langchain_val.lower() in ("true", "1", "yes"))
+    )
+    api_key = (os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY") or "").strip()
+    endpoint = os.getenv("LANGSMITH_ENDPOINT") or os.getenv("LANGCHAIN_ENDPOINT")
+    project = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT")
+
+    if endpoint:
+        os.environ["LANGCHAIN_ENDPOINT"] = endpoint
+        os.environ["LANGSMITH_ENDPOINT"] = endpoint
+    if project:
+        os.environ["LANGCHAIN_PROJECT"] = project
+        os.environ["LANGSMITH_PROJECT"] = project
+    if api_key:
+        os.environ["LANGCHAIN_API_KEY"] = api_key
+        os.environ["LANGSMITH_API_KEY"] = api_key
+
     if tracing and not api_key:
         logger.info(
-            "LangSmith tracing enabled (LANGCHAIN_TRACING_V2=true) but LANGCHAIN_API_KEY is empty. "
+            "LangSmith tracing enabled but API key is empty. "
             "Disabling remote trace submission until key is provided."
         )
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        os.environ["LANGSMITH_TRACING"] = "false"
+    elif tracing and api_key:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGSMITH_TRACING"] = "true"
 
 
 @contextmanager

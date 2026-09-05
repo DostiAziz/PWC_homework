@@ -29,8 +29,13 @@ class CapturingFakeGraph:
 
 
 def test_is_tracing_enabled_checks_flag_and_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
-    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    for key in (
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
     assert not is_tracing_enabled()
 
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
@@ -44,12 +49,14 @@ def test_is_tracing_enabled_checks_flag_and_key(monkeypatch: pytest.MonkeyPatch)
 def test_configure_langsmith_disables_tracing_if_key_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    for key in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
-    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
 
     configure_langsmith()
 
     assert os.getenv("LANGCHAIN_TRACING_V2") == "false"
+    assert os.getenv("LANGSMITH_TRACING") == "false"
 
 
 def test_configure_langsmith_preserves_tracing_if_key_present(
@@ -61,6 +68,7 @@ def test_configure_langsmith_preserves_tracing_if_key_present(
     configure_langsmith()
 
     assert os.getenv("LANGCHAIN_TRACING_V2") == "true"
+    assert os.getenv("LANGSMITH_TRACING") == "true"
 
 
 def test_record_span_records_timings_in_trace_request() -> None:
@@ -130,6 +138,18 @@ def test_agent_service_resume_passes_langsmith_config() -> None:
 def test_settings_from_env_loads_langsmith_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    for key in (
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_PROJECT",
+        "LANGSMITH_PROJECT",
+        "LANGCHAIN_ENDPOINT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
     monkeypatch.setenv("LANGCHAIN_PROJECT", "custom-retail")
     monkeypatch.setenv("LANGCHAIN_ENDPOINT", "https://custom.smith.langchain.com")
@@ -141,3 +161,32 @@ def test_settings_from_env_loads_langsmith_options(
     assert settings.langchain_project == "custom-retail"
     assert settings.langchain_endpoint == "https://custom.smith.langchain.com"
     assert settings.langchain_api_key == "secret-test-key"
+
+
+def test_settings_from_env_loads_langsmith_native_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_PROJECT",
+        "LANGSMITH_PROJECT",
+        "LANGCHAIN_ENDPOINT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "EmailAssistant")
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://eu.api.smith.langchain.com")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_testkey123")
+
+    settings = Settings.from_env()
+
+    assert settings.langchain_tracing_v2 is True
+    assert settings.langchain_project == "EmailAssistant"
+    assert settings.langchain_endpoint == "https://eu.api.smith.langchain.com"
+    assert settings.langchain_api_key == "lsv2_pt_testkey123"
+

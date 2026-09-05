@@ -112,11 +112,25 @@ class Settings(BaseModel):
             max_parallel_generations=int(_get("MAX_PARALLEL_GENERATIONS", "1") or "1"),
             retail_db_path=Path(retail_db_override) if retail_db_override else None,
             langchain_tracing_v2=(
-                os.getenv("LANGCHAIN_TRACING_V2", "false").lower() in ("true", "1", "yes")
+                (
+                    os.getenv("LANGCHAIN_TRACING_V2")
+                    or os.getenv("LANGSMITH_TRACING")
+                    or "false"
+                ).lower()
+                in ("true", "1", "yes")
             ),
-            langchain_project=os.getenv("LANGCHAIN_PROJECT", "retail-support"),
-            langchain_endpoint=os.getenv(
-                "LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com"
+            langchain_project=(
+                os.getenv("LANGCHAIN_PROJECT")
+                or os.getenv("LANGSMITH_PROJECT")
+                or "retail-support"
             ),
-            langchain_api_key=os.getenv("LANGCHAIN_API_KEY"),
+            langchain_endpoint=(
+                os.getenv("LANGCHAIN_ENDPOINT")
+                or os.getenv("LANGSMITH_ENDPOINT")
+                or "https://api.smith.langchain.com"
+            ),
+            langchain_api_key=(
+                os.getenv("LANGCHAIN_API_KEY")
+                or os.getenv("LANGSMITH_API_KEY")
+            ),
         )
