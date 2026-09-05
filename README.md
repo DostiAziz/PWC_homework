@@ -164,7 +164,7 @@ simple-agentic-rag/
 │   ├── run_evaluation.py      # 6-criterion journey evaluation
 │   ├── run_load.py            # Concurrent benchmark runner
 │   └── seed_retail_data.py    # SQLite schema & seed fixture setup
-├── src/retail_support/
+├── src/customer_support/
 │   ├── bootstrap.py           # Dependency injection root (70 lines)
 │   ├── config.py              # Pydantic settings from env (86 lines)
 │   ├── domain/                # Domain models & state (185 lines)
@@ -180,7 +180,7 @@ simple-agentic-rag/
 
 | Metric | Baseline (`c1a5c8b`) | Simple Agentic RAG | Delta |
 |---|---|---|---|
-| **Python lines in `src/retail_support`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
+| **Python lines in `src/customer_support`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
 | **LLM client integration** | Multi-file custom wrappers | `llm/ollama.py` (135 lines) | Unified single gateway with native tools |
 | **Workflow nodes** | Multi-agent supervisor tree | 5 agent nodes, 4 RAG nodes | Flat explicit StateGraph + tools loop |
 | **User interface** | 3 tabs + forms + case management | Single Streamlit chat (85 lines) | Focused conversational UI |

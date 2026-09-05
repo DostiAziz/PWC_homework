@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from retail_support.rag.ingest import CorpusChunk
-from retail_support.rag.lexical import LexicalIndex
+from customer_support.rag.ingest import CorpusChunk
+from customer_support.rag.lexical import LexicalIndex
 
 
 def make_chunk(chunk_id: str, source_id: str, text: str) -> CorpusChunk:

@@ -7,8 +7,8 @@ from typing import Any
 
 import streamlit as st
 
-from retail_support.bootstrap import Runtime, build_runtime
-from retail_support.domain.models import ChatReply, Citation
+from customer_support.bootstrap import Runtime, build_runtime
+from customer_support.domain.models import ChatReply, Citation
 
 st.set_page_config(page_title="Retail support", page_icon="💬")
 

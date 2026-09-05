@@ -2,9 +2,9 @@ from decimal import Decimal
 
 import pytest
 
-from retail_support.domain.models import CancellationPreview
-from retail_support.storage.database import Database
-from retail_support.storage.retail_repositories import (
+from customer_support.domain.models import CancellationPreview
+from customer_support.storage.database import Database
+from customer_support.storage.retail_repositories import (
     CancellationConflict,
     OrderRepository,
     ProductRepository,

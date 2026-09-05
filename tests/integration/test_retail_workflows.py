@@ -1,8 +1,8 @@
-from retail_support.rag.answer import RagAnswerer
-from retail_support.storage.database import Database
-from retail_support.storage.retail_repositories import OrderRepository, ProductRepository
-from retail_support.workflow.agent_graph import build_agent_graph
-from retail_support.workflow.tools import ToolRegistry
+from customer_support.rag.answer import RagAnswerer
+from customer_support.storage.database import Database
+from customer_support.storage.retail_repositories import OrderRepository, ProductRepository
+from customer_support.workflow.agent_graph import build_agent_graph
+from customer_support.workflow.tools import ToolRegistry
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
 
 

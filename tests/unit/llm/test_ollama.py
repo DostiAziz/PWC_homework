@@ -4,8 +4,8 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
-from retail_support.llm.embeddings import HuggingFaceEmbedder
-from retail_support.llm.ollama import (
+from customer_support.llm.embeddings import HuggingFaceEmbedder
+from customer_support.llm.ollama import (
     ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,

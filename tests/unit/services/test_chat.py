@@ -2,7 +2,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from retail_support.services.chat import AgentService
+from customer_support.services.chat import AgentService
 
 
 class FakeGraph:

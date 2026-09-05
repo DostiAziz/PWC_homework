@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from retail_support.rag.ingest import (
+from customer_support.rag.ingest import (
     ChunkingConfig,
     CorpusDocument,
     chunk_document,

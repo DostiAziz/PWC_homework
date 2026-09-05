@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from retail_support.bootstrap import build_runtime
-from retail_support.config import Settings
-from retail_support.domain.models import ChatReply
-from retail_support.storage.database import Database
+from customer_support.bootstrap import build_runtime
+from customer_support.config import Settings
+from customer_support.domain.models import ChatReply
+from customer_support.storage.database import Database
 
 try:
     from scripts.seed_retail_data import seed

@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from retail_support.domain.models import (
+from customer_support.domain.models import (
     Citation,
     RagRequest,
     RagResult,

@@ -1,5 +1,5 @@
-from retail_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from retail_support.rag.answer import RagAnswerer, prepare_query
+from customer_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from customer_support.rag.answer import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:

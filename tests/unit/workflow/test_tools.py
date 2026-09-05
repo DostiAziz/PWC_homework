@@ -1,8 +1,8 @@
-from retail_support.domain.models import CancellationPreview
-from retail_support.rag.answer import RagAnswerer
-from retail_support.storage.database import Database
-from retail_support.storage.retail_repositories import OrderRepository, ProductRepository
-from retail_support.workflow.tools import TOOL_SCHEMAS, ToolRegistry
+from customer_support.domain.models import CancellationPreview
+from customer_support.rag.answer import RagAnswerer
+from customer_support.storage.database import Database
+from customer_support.storage.retail_repositories import OrderRepository, ProductRepository
+from customer_support.workflow.tools import TOOL_SCHEMAS, ToolRegistry
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
 
 

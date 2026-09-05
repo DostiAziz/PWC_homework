@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from retail_support.domain.models import RagRequest, RagResult
-from retail_support.rag.subgraph import (
+from customer_support.domain.models import RagRequest, RagResult
+from customer_support.rag.subgraph import (
     Generator,
     KnowledgeBase,
     build_rag_graph,

@@ -9,9 +9,9 @@ from uuid import uuid4
 from langchain_core.tools import BaseTool, tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from retail_support.domain.models import CancellationPreview, Citation, RagRequest
-from retail_support.rag.answer import RagAnswerer
-from retail_support.storage.retail_repositories import (
+from customer_support.domain.models import CancellationPreview, Citation, RagRequest
+from customer_support.rag.answer import RagAnswerer
+from customer_support.storage.retail_repositories import (
     CancellationConflict,
     OrderRepository,
     ProductRepository,

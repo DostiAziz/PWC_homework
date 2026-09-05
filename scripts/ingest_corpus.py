@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from retail_support.config import Settings
-from retail_support.llm.embeddings import get_embeddings
-from retail_support.llm.ollama import get_chat_model
-from retail_support.rag.ingest import (
+from customer_support.config import Settings
+from customer_support.llm.embeddings import get_embeddings
+from customer_support.llm.ollama import get_chat_model
+from customer_support.rag.ingest import (
     ChunkingConfig,
     MetadataContextualizer,
     ModelContextualizer,
@@ -14,8 +14,8 @@ from retail_support.rag.ingest import (
     load_manifest,
     prepare_chunks,
 )
-from retail_support.rag.lexical import LexicalIndex
-from retail_support.rag.store import ChromaKnowledgeBase, chroma_client
+from customer_support.rag.lexical import LexicalIndex
+from customer_support.rag.store import ChromaKnowledgeBase, chroma_client
 
 
 def main() -> None:

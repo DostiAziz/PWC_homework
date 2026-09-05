@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from retail_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from customer_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
 
 RETAIL_HIT = RetrievalHit(
     source_id="shipping-and-orders",

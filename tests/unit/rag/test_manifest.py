@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from retail_support.rag.ingest import ManifestError, load_documents, load_manifest
+from customer_support.rag.ingest import ManifestError, load_documents, load_manifest
 
 
 def _write(path: Path, documents: list[dict[str, object]]) -> Path:

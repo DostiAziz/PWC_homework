@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from retail_support.storage.database import Database
+from customer_support.storage.database import Database
 
 
 def test_schema_contains_only_current_business_tables(tmp_path: Path) -> None:

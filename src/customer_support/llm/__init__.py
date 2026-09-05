@@ -1,7 +1,7 @@
 """Local LLM and embedding integrations."""
 
-from retail_support.llm.embeddings import HuggingFaceEmbedder, get_embeddings
-from retail_support.llm.ollama import (
+from customer_support.llm.embeddings import HuggingFaceEmbedder, get_embeddings
+from customer_support.llm.ollama import (
     ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,

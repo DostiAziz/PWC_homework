@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from retail_support.bootstrap import build_runtime
-from retail_support.config import Settings
-from retail_support.services.chat import AgentService
+from customer_support.bootstrap import build_runtime
+from customer_support.config import Settings
+from customer_support.services.chat import AgentService
 
 
 @dataclass(frozen=True, slots=True)
