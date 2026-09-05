@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from threading import BoundedSemaphore
 from typing import Any, TypeVar
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr, ValidationError
 
@@ -23,20 +26,71 @@ def get_chat_model(
     base_url: str = "http://127.0.0.1:11434",
     temperature: float = 0.0,
     request_timeout_seconds: float = 120.0,
+    max_output_tokens: int = 512,
+    max_parallel_generations: int = 1,
+    backend: Any | None = None,
     **kwargs: Any,
-) -> ChatOpenAI:
+) -> LimitedChatModel:
     """Create a ChatOpenAI model pointed at Ollama's /v1 endpoint."""
     v1_url = base_url.rstrip("/")
     if not v1_url.endswith("/v1"):
         v1_url = f"{v1_url}/v1"
-    return ChatOpenAI(
+    resolved_backend = backend or ChatOpenAI(
         model=model_name,
         base_url=v1_url,
         api_key=SecretStr("ollama"),
         temperature=temperature,
         timeout=request_timeout_seconds,
+        max_completion_tokens=max_output_tokens,
+        max_retries=2,
         **kwargs,
     )
+    return LimitedChatModel(
+        resolved_backend,
+        max_parallel_generations=max_parallel_generations,
+        acquisition_timeout_seconds=request_timeout_seconds,
+    )
+
+
+class LimitedChatModel:
+    """Serialize local generation through a limiter shared by all bound variants."""
+
+    def __init__(
+        self,
+        backend: Any,
+        *,
+        max_parallel_generations: int,
+        acquisition_timeout_seconds: float,
+        limiter: BoundedSemaphore | None = None,
+    ) -> None:
+        self.backend = backend
+        self._max_parallel_generations = max_parallel_generations
+        self._acquisition_timeout_seconds = acquisition_timeout_seconds
+        self._limiter = limiter or BoundedSemaphore(max_parallel_generations)
+
+    def invoke(
+        self,
+        messages: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        acquired = self._limiter.acquire(timeout=self._acquisition_timeout_seconds)
+        if not acquired:
+            raise OllamaUnavailable(
+                "Timed out waiting for an available local generation slot"
+            )
+        try:
+            return self.backend.invoke(messages, config=config, **kwargs)
+        finally:
+            self._limiter.release()
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> LimitedChatModel:
+        return LimitedChatModel(
+            self.backend.bind_tools(tools, **kwargs),
+            max_parallel_generations=self._max_parallel_generations,
+            acquisition_timeout_seconds=self._acquisition_timeout_seconds,
+            limiter=self._limiter,
+        )
 
 
 class ChatOpenAIAdapter:

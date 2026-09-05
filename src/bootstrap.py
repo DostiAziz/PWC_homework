@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import Settings
-from llm.embeddings import get_embeddings
+from llm.embeddings import embedding_dimension, get_embeddings, validate_collection_dimension
 from llm.ollama import get_chat_model
 from rag import ChromaKnowledgeBase, LexicalIndex, RagAnswerer, chroma_client
 from services.chat import AgentService
@@ -33,6 +33,8 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
         model_name=resolved.generation_model,
         base_url=resolved.ollama_base_url,
         request_timeout_seconds=resolved.request_timeout_seconds,
+        max_output_tokens=resolved.answer_tokens,
+        max_parallel_generations=resolved.max_parallel_generations,
     )
     knowledge_base = ChromaKnowledgeBase(
         chroma_client(resolved),
@@ -40,6 +42,11 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
         embedder,
         LexicalIndex(resolved.lexical_db),
         top_k=resolved.top_k,
+    )
+    validate_collection_dimension(
+        knowledge_base.collection,
+        embedding_dimension(embedder),
+        model_name=resolved.embedding_model,
     )
     if knowledge_base.count() == 0:
         raise RuntimeError("Knowledge base is empty. Run scripts/ingest_corpus.py first.")

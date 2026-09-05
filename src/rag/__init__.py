@@ -11,15 +11,15 @@ from rag.subgraph import (
 )
 
 __all__ = [
+    "ChromaKnowledgeBase",
     "ChunkingConfig",
     "CorpusChunk",
     "CorpusDocument",
-    "ChromaKnowledgeBase",
     "KnowledgeBase",
     "LexicalIndex",
-    "chroma_client",
     "RagAnswerer",
     "build_rag_graph",
+    "chroma_client",
     "prepare_query",
     "to_rag_result",
 ]

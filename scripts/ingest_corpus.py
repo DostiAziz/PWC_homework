@@ -4,8 +4,9 @@ import argparse
 from pathlib import Path
 
 from config import Settings
-from llm.embeddings import get_embeddings
+from llm.embeddings import embedding_dimension, get_embeddings, validate_collection_dimension
 from llm.ollama import get_chat_model
+from rag import ChromaKnowledgeBase, LexicalIndex, chroma_client
 from rag.ingest import (
     ChunkingConfig,
     MetadataContextualizer,
@@ -14,7 +15,6 @@ from rag.ingest import (
     load_manifest,
     prepare_chunks,
 )
-from rag import ChromaKnowledgeBase, LexicalIndex, chroma_client
 
 
 def main() -> None:
@@ -33,12 +33,19 @@ def main() -> None:
         model_name=settings.generation_model,
         base_url=settings.ollama_base_url,
         request_timeout_seconds=settings.request_timeout_seconds,
+        max_output_tokens=settings.answer_tokens,
+        max_parallel_generations=settings.max_parallel_generations,
     )
     store = ChromaKnowledgeBase(
         chroma_client(settings),
         settings.collection_name,
         embedder,
         LexicalIndex(settings.lexical_db),
+    )
+    validate_collection_dimension(
+        store.collection,
+        embedding_dimension(embedder),
+        model_name=settings.embedding_model,
     )
     if args.delete_source:
         deleted = store.delete_source(args.delete_source)

@@ -1,15 +1,21 @@
+from threading import Event, Lock, Thread
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
-from llm.embeddings import HuggingFaceEmbedder
+from llm.embeddings import (
+    HuggingFaceEmbedder,
+    embedding_dimension,
+    validate_collection_dimension,
+)
 from llm.ollama import (
     ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,
     StructuredOutputInvalid,
+    get_chat_model,
 )
 
 
@@ -21,7 +27,7 @@ class FakeStructuredModel:
     def __init__(self, output: Any) -> None:
         self.output = output
 
-    def invoke(self, messages: list[BaseMessage]) -> Any:
+    def invoke(self, messages: list[BaseMessage], config: Any = None, **kwargs: Any) -> Any:
         if isinstance(self.output, Exception):
             raise self.output
         return self.output
@@ -140,3 +146,98 @@ def test_chat_openai_adapter_embed_delegates_to_embedder() -> None:
     results = gw.embed(["sample"])
 
     assert results == [[1.0, 0.0]]
+
+
+def test_factory_applies_output_budget_and_finite_retries() -> None:
+    model = get_chat_model(max_output_tokens=73, max_parallel_generations=1)
+
+    assert model.backend._get_invocation_params()["max_completion_tokens"] == 73
+    assert model.backend.max_retries == 2
+
+
+class EventControlledModel(FakeChatModel):
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.fail = fail
+        self.entered = Event()
+        self.release = Event()
+        self.lock = Lock()
+        self.active = 0
+        self.peak_active = 0
+        self.configs: list[Any] = []
+
+    def invoke(self, messages: list[BaseMessage], config: Any = None, **kwargs: Any) -> Any:
+        with self.lock:
+            self.active += 1
+            self.peak_active = max(self.peak_active, self.active)
+            self.configs.append(config)
+        self.entered.set()
+        self.release.wait(timeout=2)
+        try:
+            if self.fail:
+                raise RuntimeError("backend failed")
+            return self.response
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+def test_bound_and_unbound_calls_share_generation_limit_and_forward_config() -> None:
+    backend = EventControlledModel()
+    model = get_chat_model(
+        max_output_tokens=64,
+        max_parallel_generations=1,
+        request_timeout_seconds=1,
+        backend=backend,
+    )
+    bound = model.bind_tools([])
+    first = Thread(target=model.invoke, args=([HumanMessage(content="one")], {"tags": ["one"]}))
+    second = Thread(target=bound.invoke, args=([HumanMessage(content="two")], {"tags": ["two"]}))
+
+    first.start()
+    assert backend.entered.wait(timeout=1)
+    second.start()
+    assert backend.peak_active == 1
+    backend.release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert backend.peak_active == 1
+    assert backend.configs == [{"tags": ["one"]}, {"tags": ["two"]}]
+
+
+def test_generation_exception_releases_shared_slot() -> None:
+    failing = EventControlledModel(fail=True)
+    failing.release.set()
+    model = get_chat_model(
+        max_output_tokens=64,
+        max_parallel_generations=1,
+        request_timeout_seconds=1,
+        backend=failing,
+    )
+
+    with pytest.raises(RuntimeError, match="backend failed"):
+        model.invoke([HumanMessage(content="first")])
+
+    succeeding = EventControlledModel()
+    succeeding.release.set()
+    model.backend = succeeding
+    assert model.invoke([HumanMessage(content="second")]).content == "Hello from fake"
+
+
+def test_embedding_diagnostic_rejects_incompatible_collection() -> None:
+    class CollectionModel:
+        dimension = 768
+
+    class Collection:
+        name = "retail_support"
+
+        def get_model(self) -> CollectionModel:
+            return CollectionModel()
+
+    with pytest.raises(ValueError, match=r"expected 768 dimensions.*produced 2.*rebuild"):
+        validate_collection_dimension(
+            Collection(),
+            embedding_dimension(HuggingFaceEmbedder(embeddings_instance=FakeEmbeddingsBackend())),
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+        )
