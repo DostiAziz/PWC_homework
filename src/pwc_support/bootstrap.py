@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import ollama
-
 from pwc_support.config import Settings
-from pwc_support.llm.ollama import OllamaGateway
+from pwc_support.llm.embeddings import HuggingFaceEmbedder
+from pwc_support.llm.ollama import ChatOpenAIAdapter
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
@@ -31,22 +30,17 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
     resolved = (settings or Settings.from_env()).with_retrieval_config(RETRIEVAL_CONFIG)
     database = Database(resolved.retail_db)
     database.initialize()
-    client = ollama.Client(
-        host=resolved.ollama_base_url,
-        timeout=resolved.request_timeout_seconds,
-    )
-    model = OllamaGateway(
-        client,
+    embedder = HuggingFaceEmbedder(model_name=resolved.embedding_model)
+    model = ChatOpenAIAdapter(
         generation_model=resolved.generation_model,
-        embedding_model=resolved.embedding_model,
-        num_ctx=resolved.num_ctx,
-        schema_tokens=resolved.schema_tokens,
-        max_parallel_generations=resolved.max_parallel_generations,
+        base_url=resolved.ollama_base_url,
+        request_timeout_seconds=resolved.request_timeout_seconds,
+        embedder=embedder,
     )
     knowledge_base = ChromaKnowledgeBase(
         chroma_client(resolved),
         resolved.collection_name,
-        model,
+        embedder,
         LexicalIndex(resolved.lexical_db),
         top_k=resolved.top_k,
     )

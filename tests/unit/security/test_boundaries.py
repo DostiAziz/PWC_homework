@@ -1,3 +1,4 @@
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 
 from pwc_support.rag.answer import RagAnswerer
@@ -33,10 +34,10 @@ def test_agent_preserves_system_prompt_separate_from_user_input(retail_db: Datab
     )
 
     first_call = model.calls[0]
-    assert first_call[0]["role"] == "system"
-    assert first_call[0]["content"] == SYSTEM_PROMPT
-    assert first_call[1]["role"] == "user"
-    assert first_call[1]["content"] == attack
+    assert isinstance(first_call[0], SystemMessage)
+    assert first_call[0].content == SYSTEM_PROMPT
+    assert isinstance(first_call[1], HumanMessage)
+    assert first_call[1].content == attack
 
 
 def test_order_tools_enforce_customer_boundary(retail_db: Database) -> None:

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from threading import BoundedSemaphore
 from typing import Any, TypeVar
 
-import ollama
-from httpx import HTTPError
-from pydantic import BaseModel, ValidationError
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, SecretStr, ValidationError
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -18,30 +17,58 @@ class StructuredOutputInvalid(ValueError):
     pass
 
 
-class OllamaGateway:
+class ChatOpenAIAdapter:
+    """OpenAI-compatible chat adapter pointing to local Ollama (/v1)."""
+
     def __init__(
         self,
-        client: Any,
         *,
-        generation_model: str,
-        embedding_model: str,
-        num_ctx: int | None = None,
-        schema_tokens: int = 256,
-        max_parallel_generations: int = 1,
+        generation_model: str = "gpt-oss:20b",
+        base_url: str = "http://127.0.0.1:11434",
+        temperature: float = 0.0,
+        request_timeout_seconds: float = 120.0,
+        llm: Any | None = None,
+        embedder: Any | None = None,
+        **_: Any,
     ) -> None:
-        self.client = client
         self.generation_model = generation_model
-        self.embedding_model = embedding_model
-        self.num_ctx = num_ctx
-        self.schema_tokens = schema_tokens
-        self.generation_slots = BoundedSemaphore(max_parallel_generations)
+        self.embedder = embedder
+        if llm is not None:
+            self.llm = llm
+        else:
+            v1_url = base_url.rstrip("/")
+            if not v1_url.endswith("/v1"):
+                v1_url = f"{v1_url}/v1"
+            self.llm = ChatOpenAI(
+                model=generation_model,
+                base_url=v1_url,
+                api_key=SecretStr("ollama"),
+                temperature=temperature,
+                timeout=request_timeout_seconds,
+            )
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def bind_tools(self, tools: list[dict[str, Any]]) -> Any:
+        return self.llm.bind_tools(tools)
+
+    def invoke(self, messages: list[BaseMessage] | list[Any]) -> Any:
         try:
-            response = self.client.embed(model=self.embedding_model, input=texts)
-            return [[float(value) for value in vector] for vector in response["embeddings"]]
-        except (HTTPError, ollama.RequestError, ollama.ResponseError, KeyError, TypeError) as error:
-            raise OllamaUnavailable("Ollama embedding request failed") from error
+            return self.llm.invoke(messages)
+        except Exception as error:
+            raise OllamaUnavailable("LLM request failed") from error
+
+    def chat_with_tools(
+        self,
+        *,
+        messages: list[BaseMessage] | list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        max_tokens: int = 512,
+        temperature: float = 0.0,
+    ) -> Any:
+        try:
+            bound = self.llm.bind_tools(tools) if tools else self.llm
+            return bound.invoke(messages)
+        except Exception as error:
+            raise OllamaUnavailable("LLM tool chat failed") from error
 
     def text(
         self,
@@ -51,13 +78,12 @@ class OllamaGateway:
         max_tokens: int = 512,
         temperature: float = 0.0,
     ) -> str:
-        return self._chat(
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=None,
-        )
+        try:
+            res = self.llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+            content = res.content if isinstance(res.content, str) else str(res.content)
+            return content.strip()
+        except Exception as error:
+            raise OllamaUnavailable("LLM request failed") from error
 
     def structured(
         self,
@@ -67,104 +93,30 @@ class OllamaGateway:
         schema: type[ModelT],
         temperature: float = 0.0,
     ) -> ModelT:
-        content = self._chat(
-            system=system,
-            user=user,
-            temperature=temperature,
-            max_tokens=self.schema_tokens,
-            response_format=schema.model_json_schema(),
-        )
         try:
-            return schema.model_validate_json(content)
+            structured_llm = self.llm.with_structured_output(schema)
+            output = structured_llm.invoke(
+                [SystemMessage(content=system), HumanMessage(content=user)]
+            )
+            if isinstance(output, schema):
+                return output
+            if isinstance(output, dict):
+                return schema.model_validate(output)
+            raise StructuredOutputInvalid("Output does not match expected schema")
         except ValidationError as error:
-            raise StructuredOutputInvalid("Ollama response does not match schema") from error
+            raise StructuredOutputInvalid("Response does not match schema") from error
+        except Exception as error:
+            if isinstance(error, StructuredOutputInvalid):
+                raise
+            raise OllamaUnavailable("Structured output request failed") from error
 
-    def chat_with_tools(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        max_tokens: int = 512,
-        temperature: float = 0.0,
-    ) -> dict[str, Any]:
-        options: dict[str, float | int] = {"temperature": temperature, "num_predict": max_tokens}
-        if self.num_ctx is not None:
-            options["num_ctx"] = self.num_ctx
-        formatted_messages: list[dict[str, Any]] = []
-        for msg in messages:
-            if msg.get("tool_calls"):
-                calls = [
-                    call
-                    if "function" in call
-                    else {
-                        "function": {
-                            "name": call.get("name", ""),
-                            "arguments": call.get("arguments", {}),
-                        }
-                    }
-                    for call in msg["tool_calls"]
-                ]
-                formatted_messages.append({**msg, "tool_calls": calls})
-            else:
-                formatted_messages.append(msg)
-        request: dict[str, Any] = {
-            "model": self.generation_model,
-            "messages": formatted_messages,
-            "options": options,
-        }
-        if tools:
-            request["tools"] = tools
-        try:
-            with self.generation_slots:
-                response = self.client.chat(**request)
-            message = response["message"]
-        except (HTTPError, ollama.RequestError, ollama.ResponseError, KeyError, TypeError) as error:
-            raise OllamaUnavailable("Ollama tool chat failed") from error
-        raw_calls = message.get("tool_calls") or []
-        tool_calls = [
-            {
-                "name": call["function"]["name"],
-                "arguments": dict(call["function"].get("arguments") or {}),
-            }
-            for call in raw_calls
-        ]
-        return {
-            "role": "assistant",
-            "content": message.get("content") or "",
-            "tool_calls": tool_calls,
-        }
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.embedder is not None:
+            vectors = self.embedder.embed(texts)
+            return [[float(v) for v in vector] for vector in vectors]
+        raise OllamaUnavailable("No embedder configured")
 
-    def _chat(
-        self,
-        *,
-        system: str,
-        user: str,
-        temperature: float,
-        max_tokens: int,
-        response_format: dict[str, Any] | None,
-    ) -> str:
-        options: dict[str, float | int] = {
-            "temperature": temperature,
-            "num_predict": max_tokens,
-        }
-        if self.num_ctx is not None:
-            options["num_ctx"] = self.num_ctx
-        request: dict[str, Any] = {
-            "model": self.generation_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "options": options,
-        }
-        if response_format is not None:
-            request["format"] = response_format
-        try:
-            with self.generation_slots:
-                response = self.client.chat(**request)
-            content = response["message"]["content"]
-        except (HTTPError, ollama.RequestError, ollama.ResponseError, KeyError, TypeError) as error:
-            raise OllamaUnavailable("Ollama request failed") from error
-        if not isinstance(content, str):
-            raise OllamaUnavailable("Ollama response has no text content")
-        return content.strip()
+
+# Backward compatibility aliases
+ChatOllamaAdapter = ChatOpenAIAdapter
+OllamaGateway = ChatOpenAIAdapter

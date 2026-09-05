@@ -3,8 +3,10 @@ from __future__ import annotations
 from operator import add
 from typing import Annotated, Any, Protocol, TypedDict
 
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 
@@ -21,13 +23,11 @@ SYSTEM_PROMPT = (
 
 
 class ToolModel(Protocol):
-    def chat_with_tools(
-        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> dict[str, Any]: ...
+    def invoke(self, messages: list[BaseMessage] | list[Any]) -> Any: ...
 
 
 class AgentState(TypedDict, total=False):
-    messages: Annotated[list[dict[str, Any]], add]
+    messages: Annotated[list[BaseMessage], add_messages]
     customer_id: str
     steps: Annotated[list[str], add]
     citations: tuple[Citation, ...]
@@ -36,51 +36,101 @@ class AgentState(TypedDict, total=False):
 
 
 def build_agent_graph(
-    *, model: ToolModel, registry: ToolRegistry, max_iterations: int = 6
+    *, model: Any, registry: ToolRegistry, max_iterations: int = 6
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
+    bound_model = model.bind_tools(TOOL_SCHEMAS) if hasattr(model, "bind_tools") else model
+
     def intake(state: AgentState) -> dict[str, Any]:
-        has_system = any(m.get("role") == "system" for m in state.get("messages", []))
+        has_system = any(
+            isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
+            for m in state.get("messages", [])
+        )
         if has_system:
             return {}
-        return {"messages": [{"role": "system", "content": SYSTEM_PROMPT}]}
+        return {"messages": [SystemMessage(content=SYSTEM_PROMPT)]}
 
     def agent(state: AgentState) -> dict[str, Any]:
         msgs = list(state["messages"])
-        system_msgs = [m for m in msgs if m.get("role") == "system"]
-        other_msgs = [m for m in msgs if m.get("role") != "system"]
+        system_msgs = [
+            m
+            for m in msgs
+            if isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
+        ]
+        other_msgs = [
+            m
+            for m in msgs
+            if not (
+                isinstance(m, SystemMessage)
+                or (isinstance(m, dict) and m.get("role") == "system")
+            )
+        ]
         ordered = system_msgs + other_msgs
-        message = model.chat_with_tools(messages=ordered, tools=TOOL_SCHEMAS)
+        if hasattr(bound_model, "invoke"):
+            message = bound_model.invoke(ordered)
+        elif hasattr(bound_model, "chat_with_tools"):
+            raw = bound_model.chat_with_tools(messages=ordered, tools=TOOL_SCHEMAS)
+            if isinstance(raw, dict):
+                calls = [
+                    {
+                        "name": c["name"],
+                        "args": c.get("arguments") or c.get("args") or {},
+                        "id": c.get("id") or f"call_{c['name']}",
+                    }
+                    for c in raw.get("tool_calls", [])
+                ]
+                message = AIMessage(content=raw.get("content", ""), tool_calls=calls)
+            else:
+                message = raw
+        else:
+            message = bound_model(ordered)
         return {"messages": [message], "iterations": state.get("iterations", 0) + 1}
 
     def route(state: AgentState) -> str:
         last = state["messages"][-1]
-        calls = last.get("tool_calls") or []
-        if not calls or state.get("iterations", 0) >= max_iterations:
+        raw_calls = (
+            getattr(last, "tool_calls", None)
+            or (last.get("tool_calls") if isinstance(last, dict) else None)
+            or []
+        )
+        if not raw_calls or state.get("iterations", 0) >= max_iterations:
             return "respond"
-        if any(c["name"] == "cancel_order" for c in calls):
+        if any(c.get("name") == "cancel_order" for c in raw_calls):
             return "confirm"
         return "tools"
 
     def tools(state: AgentState) -> dict[str, Any]:
         last = state["messages"][-1]
-        results: list[dict[str, Any]] = []
+        raw_calls = (
+            getattr(last, "tool_calls", None)
+            or (last.get("tool_calls") if isinstance(last, dict) else None)
+            or []
+        )
+        results: list[ToolMessage] = []
         steps: list[str] = []
         citations: tuple[Citation, ...] = state.get("citations", ())
-        for call in last.get("tool_calls") or []:
-            outcome = registry.run(
-                call["name"], call["arguments"], customer_id=state["customer_id"]
-            )
-            results.append({"role": "tool", "tool_name": call["name"], "content": outcome.content})
-            steps.append(call["name"])
+        for call in raw_calls:
+            name = call.get("name", "")
+            args = call.get("args") or call.get("arguments") or {}
+            call_id = call.get("id") or f"call_{name}"
+            outcome = registry.run(name, args, customer_id=state["customer_id"])
+            results.append(ToolMessage(content=outcome.content, name=name, tool_call_id=call_id))
+            steps.append(name)
             if outcome.citations:
                 citations = outcome.citations
         return {"messages": results, "steps": steps, "citations": citations}
 
     def confirm(state: AgentState) -> dict[str, Any]:
         last = state["messages"][-1]
-        call = next(c for c in last["tool_calls"] if c["name"] == "cancel_order")
+        raw_calls = (
+            getattr(last, "tool_calls", None)
+            or (last.get("tool_calls") if isinstance(last, dict) else None)
+            or []
+        )
+        call = next(c for c in raw_calls if c.get("name") == "cancel_order")
+        args = call.get("args") or call.get("arguments") or {}
+        call_id = call.get("id") or "call_cancel_order"
         preview = registry.build_cancellation(
-            str(call["arguments"].get("order_id", "")), state["customer_id"]
+            str(args.get("order_id", "")), state["customer_id"]
         )
         if isinstance(preview, str):
             content = preview
@@ -92,13 +142,22 @@ def build_agent_graph(
                 else f"Order {preview.order_id} was not cancelled."
             )
         return {
-            "messages": [{"role": "tool", "tool_name": "cancel_order", "content": content}],
+            "messages": [ToolMessage(content=content, name="cancel_order", tool_call_id=call_id)],
             "steps": ["cancel_order"],
         }
 
     def respond(state: AgentState) -> dict[str, Any]:
-        answers = [m.get("content", "") for m in state["messages"] if m.get("role") == "assistant"]
-        text = answers[-1] if answers and answers[-1] else "I'm not sure how to help with that."
+        answers = [
+            m.content
+            for m in state["messages"]
+            if (isinstance(m, AIMessage) and m.content)
+            or (isinstance(m, dict) and m.get("role") == "assistant" and m.get("content"))
+        ]
+        text = (
+            str(answers[-1])
+            if answers and answers[-1]
+            else "I'm not sure how to help with that."
+        )
         return {"response": text, "citations": state.get("citations", ())}
 
     builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)
