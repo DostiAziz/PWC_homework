@@ -1,3 +1,4 @@
+from pwc_support.domain.models import CancellationPreview
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.storage.database import Database
 from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
@@ -54,3 +55,34 @@ def test_cancel_order_defers_to_confirmation(retail_db: Database) -> None:
 def test_unknown_tool_returns_safe_message(retail_db: Database) -> None:
     out = _registry(retail_db).run("nope", {}, customer_id="CUS-1001")
     assert "unknown" in out.content.lower()
+
+
+def test_build_cancellation_previews_eligible_order(retail_db: Database) -> None:
+    reg = _registry(retail_db)
+    preview = reg.build_cancellation("ORD-2001", "CUS-1001")
+    assert isinstance(preview, CancellationPreview)
+    assert preview.order_id == "ORD-2001"
+    # No mutation yet.
+    order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
+    assert order is not None and order.status == "processing"
+
+
+def test_build_cancellation_refuses_shipped_order(retail_db: Database) -> None:
+    msg = _registry(retail_db).build_cancellation("ORD-5001", "CUS-1001")
+    assert isinstance(msg, str) and "already shipped" in msg
+
+
+def test_build_cancellation_refuses_unknown_order(retail_db: Database) -> None:
+    msg = _registry(retail_db).build_cancellation("ORD-3001", "CUS-1001")
+    assert isinstance(msg, str) and "could not find" in msg.lower()
+
+
+def test_commit_cancellation_mutates_once(retail_db: Database) -> None:
+    reg = _registry(retail_db)
+    preview = reg.build_cancellation("ORD-2001", "CUS-1001")
+    assert isinstance(preview, CancellationPreview)
+    msg = reg.commit_cancellation(preview)
+    assert msg == "Order ORD-2001 has been cancelled."
+    order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
+    assert order is not None and order.status == "cancelled" and order.version == 2
+

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
+from uuid import uuid4
 
-from pwc_support.domain.models import Citation, RagRequest
+from pwc_support.domain.models import CancellationPreview, Citation, RagRequest
 from pwc_support.rag.answer import RagAnswerer
-from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
+from pwc_support.storage.retail_repositories import (
+    CancellationConflict,
+    OrderRepository,
+    ProductRepository,
+)
 
 TOOL_SCHEMAS: list[dict] = [
     {
@@ -81,11 +87,42 @@ class ToolOutcome:
 
 class ToolRegistry:
     def __init__(
-        self, products: ProductRepository, orders: OrderRepository, rag: RagAnswerer
+        self,
+        products: ProductRepository,
+        orders: OrderRepository,
+        rag: RagAnswerer,
+        token_factory: Callable[[], str] | None = None,
     ) -> None:
         self.products = products
         self.orders = orders
         self.rag = rag
+        self.token_factory = token_factory or (lambda: str(uuid4()))
+
+    def build_cancellation(self, order_id: str, customer_id: str) -> CancellationPreview | str:
+        order = self.orders.lookup(order_id, customer_id)
+        if order is None:
+            return "I could not find that order for this customer."
+        if order.fulfilment_status != "processing" or order.status not in {"processing", "paid"}:
+            reason = (
+                "because it has already shipped"
+                if order.fulfilment_status in {"shipped", "delivered"}
+                else "in its current state"
+            )
+            return f"Order {order.order_id} cannot be cancelled {reason}."
+        return CancellationPreview(
+            confirmation_token=self.token_factory(),
+            order_id=order.order_id,
+            customer_id=customer_id,
+            expected_version=order.version,
+            summary=f"Cancel order {order.order_id} for {order.total} {order.currency}",
+        )
+
+    def commit_cancellation(self, preview: CancellationPreview) -> str:
+        try:
+            result = self.orders.cancel(preview)
+        except CancellationConflict:
+            return "The order could not be changed safely. No cancellation was made."
+        return f"Order {result.order_id} has been cancelled."
 
     def run(self, name: str, arguments: dict, *, customer_id: str) -> ToolOutcome:
         try:
