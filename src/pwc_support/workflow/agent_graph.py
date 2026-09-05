@@ -21,7 +21,9 @@ SYSTEM_PROMPT = (
 
 
 class ToolModel(Protocol):
-    def chat_with_tools(self, *, messages: list[dict], tools: list[dict]) -> dict[str, Any]: ...
+    def chat_with_tools(
+        self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]: ...
 
 
 class AgentState(TypedDict, total=False):
@@ -43,7 +45,11 @@ def build_agent_graph(
         return {"messages": [{"role": "system", "content": SYSTEM_PROMPT}]}
 
     def agent(state: AgentState) -> dict[str, Any]:
-        message = model.chat_with_tools(messages=list(state["messages"]), tools=TOOL_SCHEMAS)
+        msgs = list(state["messages"])
+        system_msgs = [m for m in msgs if m.get("role") == "system"]
+        other_msgs = [m for m in msgs if m.get("role") != "system"]
+        ordered = system_msgs + other_msgs
+        message = model.chat_with_tools(messages=ordered, tools=TOOL_SCHEMAS)
         return {"messages": [message], "iterations": state.get("iterations", 0) + 1}
 
     def route(state: AgentState) -> str:
@@ -64,9 +70,7 @@ def build_agent_graph(
             outcome = registry.run(
                 call["name"], call["arguments"], customer_id=state["customer_id"]
             )
-            results.append(
-                {"role": "tool", "tool_name": call["name"], "content": outcome.content}
-            )
+            results.append({"role": "tool", "tool_name": call["name"], "content": outcome.content})
             steps.append(call["name"])
             if outcome.citations:
                 citations = outcome.citations
@@ -93,9 +97,7 @@ def build_agent_graph(
         }
 
     def respond(state: AgentState) -> dict[str, Any]:
-        answers = [
-            m.get("content", "") for m in state["messages"] if m.get("role") == "assistant"
-        ]
+        answers = [m.get("content", "") for m in state["messages"] if m.get("role") == "assistant"]
         text = answers[-1] if answers and answers[-1] else "I'm not sure how to help with that."
         return {"response": text, "citations": state.get("citations", ())}
 

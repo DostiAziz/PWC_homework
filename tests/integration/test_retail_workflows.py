@@ -1,75 +1,82 @@
-from pwc_support.domain.models import (
-    CatalogueAction,
-    OrderAction,
-    RagResult,
-    Task,
-    TaskKind,
-)
+from pwc_support.rag.answer import RagAnswerer
 from pwc_support.storage.database import Database
 from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
-from pwc_support.workflow.commerce import CommerceTools
-from pwc_support.workflow.graph import build_graph
+from pwc_support.workflow.agent_graph import build_agent_graph
+from pwc_support.workflow.tools import ToolRegistry
+from tests.fakes import FakeGenerator, FakeKnowledgeBase
 
 
-class StaticPlanner:
-    def __init__(self, tasks: tuple[Task, ...]) -> None:
-        self.tasks = tasks
+class ScriptedModel:
+    def __init__(self, script: list[dict]) -> None:
+        self.script = list(script)
 
-    def plan(self, _: str) -> tuple[Task, ...]:
-        return self.tasks
+    def chat_with_tools(self, *, messages, tools):
+        return self.script.pop(0)
 
 
-class UnusedRag:
-    def answer(self, _: object) -> RagResult:
-        raise AssertionError("RAG must not run for commerce-only requests")
+def _registry(retail_db: Database) -> ToolRegistry:
+    rag = RagAnswerer(FakeKnowledgeBase(), FakeGenerator())
+    return ToolRegistry(ProductRepository(retail_db), OrderRepository(retail_db), rag)
 
 
 def test_compound_catalogue_and_order_request_uses_real_sqlite(retail_db: Database) -> None:
-    tasks = (
-        Task(
-            task_id="task-1",
-            kind=TaskKind.CATALOGUE,
-            request="Show jacket offers",
-            product_query="jacket",
-            catalogue_action=CatalogueAction.OFFERS,
-        ),
-        Task(
-            task_id="task-2",
-            kind=TaskKind.ORDER,
-            request="Where is ORD-5001?",
-            order_id="ORD-5001",
-            order_action=OrderAction.LOOKUP,
-        ),
+    model = ScriptedModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"name": "list_offers", "arguments": {"category": "jacket"}},
+                    {"name": "get_order_status", "arguments": {"order_id": "ORD-5001"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Trail Shell is on offer. Order ORD-5001 is shipped.",
+                "tool_calls": [],
+            },
+        ]
     )
-    graph = build_graph(
-        planner=StaticPlanner(tasks),
-        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
-        rag_answerer=UnusedRag(),
+    graph = build_agent_graph(model=model, registry=_registry(retail_db))
+    out = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "Show jacket offers and find ORD-5001"}],
+            "customer_id": "CUS-1001",
+        },
+        {"configurable": {"thread_id": "int-1"}},
     )
 
-    result = graph.invoke(
-        {"message": "Show jacket offers and find ORD-5001", "customer_id": "CUS-1001"}
-    )
-
-    assert "Trail Shell" in result["response"]
-    assert "Order ORD-5001 is shipped." in result["response"]
+    assert "Trail Shell" in out["response"]
+    assert "Order ORD-5001 is shipped." in out["response"]
+    assert "list_offers" in out["steps"]
+    assert "get_order_status" in out["steps"]
 
 
 def test_order_path_does_not_disclose_another_customers_order(retail_db: Database) -> None:
-    task = Task(
-        task_id="task-1",
-        kind=TaskKind.ORDER,
-        request="Where is ORD-3001?",
-        order_id="ORD-3001",
-        order_action=OrderAction.LOOKUP,
+    model = ScriptedModel(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"name": "get_order_status", "arguments": {"order_id": "ORD-3001"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "I could not find that order for this customer.",
+                "tool_calls": [],
+            },
+        ]
     )
-    graph = build_graph(
-        planner=StaticPlanner((task,)),
-        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
-        rag_answerer=UnusedRag(),
+    graph = build_agent_graph(model=model, registry=_registry(retail_db))
+    out = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "Where is ORD-3001?"}],
+            "customer_id": "CUS-1001",
+        },
+        {"configurable": {"thread_id": "int-2"}},
     )
 
-    result = graph.invoke({"message": task.request, "customer_id": "CUS-1001"})
-
-    assert result["response"] == "I could not find that order for this customer."
-    assert "CUS-1002" not in result["response"]
+    assert out["response"] == "I could not find that order for this customer."
+    assert "CUS-1002" not in out["response"]

@@ -13,16 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class AgentGraph(Protocol):
-    def invoke(self, payload: Any, config: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any: ...
 
 
 class AgentService:
     def __init__(self, graph: AgentGraph) -> None:
         self.graph = graph
 
-    def submit(
-        self, *, body: str, customer_id: str, thread_id: str | None = None
-    ) -> ChatReply:
+    def submit(self, *, body: str, customer_id: str, thread_id: str | None = None) -> ChatReply:
         tid = thread_id or str(uuid.uuid4())
         payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
         return self._run(payload, tid)
@@ -63,4 +61,3 @@ class AgentService:
 
 
 ChatService = AgentService
-

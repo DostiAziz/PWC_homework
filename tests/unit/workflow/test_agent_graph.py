@@ -35,9 +35,7 @@ def test_agent_calls_tool_then_answers(retail_db: Database) -> None:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"name": "get_order_status", "arguments": {"order_id": "ORD-5001"}}
-                ],
+                "tool_calls": [{"name": "get_order_status", "arguments": {"order_id": "ORD-5001"}}],
             },
             {"role": "assistant", "content": "Your order ORD-5001 is shipped.", "tool_calls": []},
         ]
@@ -95,11 +93,13 @@ def test_cancellation_pauses_then_commits_on_yes(retail_db: Database) -> None:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"name": "cancel_order", "arguments": {"order_id": "ORD-2001"}}
-                ],
+                "tool_calls": [{"name": "cancel_order", "arguments": {"order_id": "ORD-2001"}}],
             },
-            {"role": "assistant", "content": "Order ORD-2001 has been cancelled.", "tool_calls": []},
+            {
+                "role": "assistant",
+                "content": "Order ORD-2001 has been cancelled.",
+                "tool_calls": [],
+            },
         ]
     )
     graph = build_agent_graph(model=model, registry=_registry(retail_db))
@@ -126,9 +126,7 @@ def test_cancellation_rejected_on_no(retail_db: Database) -> None:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"name": "cancel_order", "arguments": {"order_id": "ORD-4001"}}
-                ],
+                "tool_calls": [{"name": "cancel_order", "arguments": {"order_id": "ORD-4001"}}],
             },
             {"role": "assistant", "content": "Order ORD-4001 was not cancelled.", "tool_calls": []},
         ]

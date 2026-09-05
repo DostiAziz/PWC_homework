@@ -45,9 +45,7 @@ def test_search_policies_returns_citations(retail_db: Database) -> None:
 
 
 def test_cancel_order_defers_to_confirmation(retail_db: Database) -> None:
-    out = _registry(retail_db).run(
-        "cancel_order", {"order_id": "ORD-2001"}, customer_id="CUS-1001"
-    )
+    out = _registry(retail_db).run("cancel_order", {"order_id": "ORD-2001"}, customer_id="CUS-1001")
     assert out.requires_confirmation is True
     assert out.order_id == "ORD-2001"
 
@@ -85,4 +83,3 @@ def test_commit_cancellation_mutates_once(retail_db: Database) -> None:
     assert msg == "Order ORD-2001 has been cancelled."
     order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
     assert order is not None and order.status == "cancelled" and order.version == 2
-

@@ -187,9 +187,4 @@ class ChatReply(DomainModel):
     steps: tuple[str, ...] = ()
     awaiting_confirmation: bool = False
     preview: str = ""
-    tasks: tuple[Task, ...] = ()
-    events: tuple[TraceEvent, ...] = ()
-    pending_cancellation: CancellationPreview | None = None
-    awaiting_cancel: bool = False
     total_duration_ms: float = Field(ge=0, default=0.0)
-
