@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pwc_support.config import Settings
-from pwc_support.llm.embeddings import HuggingFaceEmbedder
-from pwc_support.llm.ollama import ChatOpenAIAdapter
+from pwc_support.llm.embeddings import get_embeddings
+from pwc_support.llm.ollama import get_chat_model
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
@@ -30,12 +30,11 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
     resolved = (settings or Settings.from_env()).with_retrieval_config(RETRIEVAL_CONFIG)
     database = Database(resolved.retail_db)
     database.initialize()
-    embedder = HuggingFaceEmbedder(model_name=resolved.embedding_model)
-    model = ChatOpenAIAdapter(
-        generation_model=resolved.generation_model,
+    embedder = get_embeddings(model_name=resolved.embedding_model)
+    model = get_chat_model(
+        model_name=resolved.generation_model,
         base_url=resolved.ollama_base_url,
         request_timeout_seconds=resolved.request_timeout_seconds,
-        embedder=embedder,
     )
     knowledge_base = ChromaKnowledgeBase(
         chroma_client(resolved),

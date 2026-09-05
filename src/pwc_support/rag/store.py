@@ -11,7 +11,7 @@ from pwc_support.rag.lexical import LexicalIndex
 
 
 class Embedder(Protocol):
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
+    def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
 
 
 def chroma_client(settings: Any) -> Any:
@@ -45,9 +45,30 @@ class ChromaKnowledgeBase:
         self.collection = client.get_or_create_collection(
             collection_name, configuration={"hnsw": {"space": "cosine"}}
         )
-        self.embedder = embedder
+        self.embedder: Any = embedder
         self.lexical_index = lexical_index
         self.top_k = top_k
+
+    def _embed_documents(self, texts: list[str]) -> list[list[float]]:
+        fn = (
+            getattr(self.embedder, "embed_documents", None)
+            or getattr(self.embedder, "embed", None)
+        )
+        if fn is not None:
+            return [[float(v) for v in vec] for vec in fn(texts)]
+        raise ValueError("Configured embedder does not support embed_documents or embed")
+
+    def _embed_query(self, text: str) -> list[float]:
+        fn_query = getattr(self.embedder, "embed_query", None)
+        if fn_query is not None:
+            return [float(v) for v in fn_query(text)]
+        fn_docs = (
+            getattr(self.embedder, "embed_documents", None)
+            or getattr(self.embedder, "embed", None)
+        )
+        if fn_docs is not None:
+            return [float(v) for v in fn_docs([text])[0]]
+        raise ValueError("Configured embedder does not support embed_query or embed")
 
     def sync(
         self,
@@ -71,7 +92,7 @@ class ChromaKnowledgeBase:
             self.collection.upsert(
                 ids=[chunk.chunk_id for chunk in batch],
                 documents=[chunk.original_text for chunk in batch],
-                embeddings=self.embedder.embed([chunk.embedding_text for chunk in batch]),
+                embeddings=self._embed_documents([chunk.embedding_text for chunk in batch]),
                 metadatas=[self._metadata(chunk) for chunk in batch],
             )
         if self.lexical_index is not None:
@@ -118,7 +139,7 @@ class ChromaKnowledgeBase:
                 language=cast(Literal["en"], language),
             )
         where = {"$and": [{"language": request.language}, {"source_status": "active"}]}
-        query_embedding = self.embedder.embed([request.question])[0]
+        query_embedding = self._embed_query(request.question)
         result = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,

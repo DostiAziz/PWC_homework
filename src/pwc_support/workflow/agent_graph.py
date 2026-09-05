@@ -54,19 +54,8 @@ def build_agent_graph(
 
     def agent(state: AgentState) -> dict[str, Any]:
         msgs = list(state["messages"])
-        system_msgs = [
-            m
-            for m in msgs
-            if isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
-        ]
-        other_msgs = [
-            m
-            for m in msgs
-            if not (
-                isinstance(m, SystemMessage)
-                or (isinstance(m, dict) and m.get("role") == "system")
-            )
-        ]
+        system_msgs = [m for m in msgs if isinstance(m, SystemMessage)]
+        other_msgs = [m for m in msgs if not isinstance(m, SystemMessage)]
         ordered = system_msgs + other_msgs
         if hasattr(bound_model, "invoke"):
             message = bound_model.invoke(ordered)

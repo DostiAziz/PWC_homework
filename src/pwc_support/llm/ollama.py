@@ -17,6 +17,28 @@ class StructuredOutputInvalid(ValueError):
     pass
 
 
+def get_chat_model(
+    model_name: str = "gpt-oss:20b",
+    *,
+    base_url: str = "http://127.0.0.1:11434",
+    temperature: float = 0.0,
+    request_timeout_seconds: float = 120.0,
+    **kwargs: Any,
+) -> ChatOpenAI:
+    """Create a ChatOpenAI model pointed at Ollama's /v1 endpoint."""
+    v1_url = base_url.rstrip("/")
+    if not v1_url.endswith("/v1"):
+        v1_url = f"{v1_url}/v1"
+    return ChatOpenAI(
+        model=model_name,
+        base_url=v1_url,
+        api_key=SecretStr("ollama"),
+        temperature=temperature,
+        timeout=request_timeout_seconds,
+        **kwargs,
+    )
+
+
 class ChatOpenAIAdapter:
     """OpenAI-compatible chat adapter pointing to local Ollama (/v1)."""
 
@@ -36,15 +58,11 @@ class ChatOpenAIAdapter:
         if llm is not None:
             self.llm = llm
         else:
-            v1_url = base_url.rstrip("/")
-            if not v1_url.endswith("/v1"):
-                v1_url = f"{v1_url}/v1"
-            self.llm = ChatOpenAI(
-                model=generation_model,
-                base_url=v1_url,
-                api_key=SecretStr("ollama"),
+            self.llm = get_chat_model(
+                model_name=generation_model,
+                base_url=base_url,
                 temperature=temperature,
-                timeout=request_timeout_seconds,
+                request_timeout_seconds=request_timeout_seconds,
             )
 
     def bind_tools(self, tools: list[dict[str, Any]]) -> Any:
