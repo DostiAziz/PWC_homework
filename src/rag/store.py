@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, cast
 from pydantic import BaseModel
 
 from domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from observability import record_span
 from rag.ingest import CorpusChunk
 
 
@@ -188,19 +189,20 @@ class ChromaKnowledgeBase:
     def retrieve(
         self, request: RagRequest | str, *, language: str = "en", top_k: int | None = None
     ) -> RetrievalBatch:
-        top_k = self.top_k if top_k is None else top_k
-        if isinstance(request, str):
-            request = RagRequest(
-                question=request,
-                language=cast(Literal["en"], language),
+        with record_span("retrieval"):
+            top_k = self.top_k if top_k is None else top_k
+            if isinstance(request, str):
+                request = RagRequest(
+                    question=request,
+                    language=cast(Literal["en"], language),
+                )
+            where = {"$and": [{"language": request.language}, {"source_status": "active"}]}
+            query_embedding = self._embed_query(request.question)
+            result = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                where=where,
             )
-        where = {"$and": [{"language": request.language}, {"source_status": "active"}]}
-        query_embedding = self._embed_query(request.question)
-        result = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            where=where,
-        )
         distances = (result.get("distances") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]

@@ -9,6 +9,8 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from observability import record_span
+
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -74,13 +76,15 @@ class LimitedChatModel:
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Any:
-        acquired = self._limiter.acquire(timeout=self._acquisition_timeout_seconds)
-        if not acquired:
-            raise OllamaUnavailable(
-                "Timed out waiting for an available local generation slot"
-            )
+        with record_span("generation.queue"):
+            acquired = self._limiter.acquire(timeout=self._acquisition_timeout_seconds)
+            if not acquired:
+                raise OllamaUnavailable(
+                    "Timed out waiting for an available local generation slot"
+                )
         try:
-            return self.backend.invoke(messages, config=config, **kwargs)
+            with record_span("generation.invoke"):
+                return self.backend.invoke(messages, config=config, **kwargs)
         finally:
             self._limiter.release()
 

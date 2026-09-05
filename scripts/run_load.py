@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import statistics
 import time
@@ -41,7 +42,23 @@ def run_phase(
     *,
     requests: int,
     concurrency: int,
+    warmup: bool = True,
 ) -> dict[str, Any]:
+    if requests <= 0:
+        raise ValueError("requests must be positive")
+    if concurrency <= 0:
+        raise ValueError("concurrency must be positive")
+    if not workload:
+        raise ValueError("workload must not be empty")
+
+    if warmup:
+        for case in workload:
+            with contextlib.suppress(Exception):
+                service.submit(
+                    body=str(case["question"]),
+                    customer_id=str(case["customer_id"]),
+                )
+
     def submit(index: int) -> RequestSample:
         case = workload[index % len(workload)]
         started = time.perf_counter()
@@ -58,8 +75,11 @@ def run_phase(
                 node_ms={},
                 error=f"{type(error).__name__}: {error}",
             )
-        failed = "unavailable" in reply.message.lower()
-        node_ms: dict[str, float] = {"agent": reply.total_duration_ms}
+        failed = reply.status in {"unavailable", "iteration_limit", "invalid_request"}
+        if reply.spans:
+            node_ms = {span.name: span.exclusive_ms for span in reply.spans}
+        else:
+            node_ms = {"agent": reply.total_duration_ms}
         return RequestSample(
             index=index,
             question_id=str(case["id"]),
