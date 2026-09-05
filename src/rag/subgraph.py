@@ -175,7 +175,12 @@ def build_rag_graph(
                 "status": "insufficient_evidence",
                 "node_timings": _timed("answer_with_citations", started),
             }
-        return {"answer": answer, "node_timings": _timed("answer_with_citations", started)}
+        cited_citations = tuple(c for c in citations if c.marker in used_markers)
+        return {
+            "answer": answer,
+            "citations": cited_citations,
+            "node_timings": _timed("answer_with_citations", started),
+        }
 
     builder: StateGraph[RagState, None, RagState, RagState] = StateGraph(RagState)
     builder.add_node("prepare_query", prepare_query_node)

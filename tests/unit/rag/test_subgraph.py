@@ -74,3 +74,22 @@ def test_selection_respects_the_maximum_hit_budget() -> None:
     state = graph.invoke({"request": RagRequest(question="What services does PwC provide?")})
 
     assert len(state["selected"]) == 2
+
+
+def test_subgraph_filters_citations_to_only_those_cited() -> None:
+    hits = (
+        RetrievalHit(
+            source_id="s1", chunk_id="c1", title="t1", text="e1", heading="h1", similarity=0.9
+        ),
+        RetrievalHit(
+            source_id="s2", chunk_id="c2", title="t2", text="e2", heading="h2", similarity=0.85
+        ),
+    )
+    generator = FakeGenerator(template="Only citing the first source. [S1]")
+    graph = build_rag_graph(FakeKnowledgeBase(hits=hits), generator)
+    state = graph.invoke({"request": RagRequest(question="What services are available?")})
+
+    assert state["status"] == "answered"
+    assert len(state["citations"]) == 1
+    assert state["citations"][0].marker == "[S1]"
+    assert state["citations"][0].source_id == "s1"
