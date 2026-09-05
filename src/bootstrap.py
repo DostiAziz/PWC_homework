@@ -6,9 +6,7 @@ from pathlib import Path
 from config import Settings
 from llm.embeddings import get_embeddings
 from llm.ollama import get_chat_model
-from rag.answer import RagAnswerer
-from rag.lexical import LexicalIndex
-from rag.store import ChromaKnowledgeBase, chroma_client
+from rag import ChromaKnowledgeBase, LexicalIndex, RagAnswerer, chroma_client
 from services.chat import AgentService
 from storage.database import Database
 from storage.retail_repositories import OrderRepository, ProductRepository

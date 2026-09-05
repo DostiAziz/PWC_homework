@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 
-from rag.answer import RagAnswerer
+from rag import RagAnswerer
 from storage.database import Database
 from storage.retail_repositories import OrderRepository, ProductRepository
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
