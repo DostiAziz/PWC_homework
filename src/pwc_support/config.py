@@ -13,11 +13,11 @@ class Settings(BaseModel):
     artifacts_dir: Path = Path("artifacts")
     ollama_base_url: str = "http://127.0.0.1:11434"
     generation_model: str = "gpt-oss:20b"
-    embedding_model: str = "nomic-embed-text"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     chroma_mode: Literal["persistent", "http"] = "persistent"
     chroma_host: str = "127.0.0.1"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
-    collection_name: str = "retail_support_v1_nomic_768_cosine"
+    collection_name: str = "retail_support_v1_hf_384_cosine"
     num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
     schema_tokens: int = Field(default=1024, ge=64, le=4096)
@@ -76,7 +76,9 @@ class Settings(BaseModel):
             chunk_size_tokens=int(os.getenv("PWC_CHUNK_SIZE_TOKENS", "300")),
             chunk_overlap_tokens=int(os.getenv("PWC_CHUNK_OVERLAP_TOKENS", "50")),
             generation_model=os.getenv("PWC_GENERATION_MODEL", "gpt-oss:20b"),
-            embedding_model=os.getenv("PWC_EMBEDDING_MODEL", "nomic-embed-text"),
+            embedding_model=os.getenv(
+                "PWC_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+            ),
             answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
             num_ctx=int(os.getenv("PWC_NUM_CTX", "8192")),
             schema_tokens=int(os.getenv("PWC_SCHEMA_TOKENS", "1024")),

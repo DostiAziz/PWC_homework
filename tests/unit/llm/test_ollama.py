@@ -1,10 +1,12 @@
 from typing import Any
 
 import pytest
-from httpx import ReadTimeout
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
+from pwc_support.llm.embeddings import HuggingFaceEmbedder
 from pwc_support.llm.ollama import (
+    ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,
     StructuredOutputInvalid,
@@ -15,105 +17,89 @@ class Output(BaseModel):
     route: str
 
 
-class RecordingClient:
+class FakeStructuredModel:
+    def __init__(self, output: Any) -> None:
+        self.output = output
+
+    def invoke(self, messages: list[BaseMessage]) -> Any:
+        if isinstance(self.output, Exception):
+            raise self.output
+        return self.output
+
+
+class FakeChatModel:
+    def __init__(self, response: Any = None) -> None:
+        self.response = response or AIMessage(content="Hello from fake")
+        self.bound_tools: list[dict[str, Any]] | None = None
+        self.captured_messages: list[BaseMessage] = []
+
+    def invoke(self, messages: list[BaseMessage]) -> Any:
+        if isinstance(self.response, Exception):
+            raise self.response
+        self.captured_messages = list(messages)
+        return self.response
+
+    def bind_tools(self, tools: list[dict[str, Any]]) -> Any:
+        self.bound_tools = tools
+        return self
+
+    def with_structured_output(self, schema: type[Any]) -> Any:
+        return FakeStructuredModel(Output(route="catalogue"))
+
+
+class FakeEmbeddingsBackend:
     def __init__(self) -> None:
-        self.chat_request: dict[str, Any] = {}
+        self.calls: list[list[str]] = []
 
-    def chat(self, **kwargs: Any) -> dict[str, Any]:
-        self.chat_request = kwargs
-        return {"message": {"content": '{"route":"catalogue"}'}}
-
-    def embed(self, **_: Any) -> dict[str, Any]:
-        return {"embeddings": [[1, 0], [0, 1]]}
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(texts)
+        return [[1.0, 0.0] for _ in texts]
 
 
-def test_structured_generation_sends_schema_and_validates_response() -> None:
-    client = RecordingClient()
-    gateway = OllamaGateway(
-        client,
-        generation_model="gpt-oss:20b",
-        embedding_model="nomic-embed-text",
-        schema_tokens=128,
-        num_ctx=4096,
-    )
+def test_structured_generation_returns_validated_model() -> None:
+    fake_llm = FakeChatModel()
+    gateway = ChatOpenAIAdapter(llm=fake_llm)
 
     output = gateway.structured(system="Classify", user="offers", schema=Output)
 
+    assert isinstance(output, Output)
     assert output.route == "catalogue"
-    assert client.chat_request["format"] == Output.model_json_schema()
-    assert client.chat_request["options"] == {
-        "temperature": 0.0,
-        "num_predict": 128,
-        "num_ctx": 4096,
-    }
 
 
-def test_text_and_embeddings_use_explicit_models() -> None:
-    client = RecordingClient()
-    gateway = OllamaGateway(
-        client,
-        generation_model="gpt-oss:20b",
-        embedding_model="nomic-embed-text",
-    )
+def test_text_generation_returns_string() -> None:
+    fake_llm = FakeChatModel(response=AIMessage(content="Order shipped."))
+    gateway = ChatOpenAIAdapter(llm=fake_llm)
 
-    assert gateway.text(system="Answer", user="question") == '{"route":"catalogue"}'
-    assert gateway.embed(["a", "b"]) == [[1.0, 0.0], [0.0, 1.0]]
+    assert gateway.text(system="System", user="Where is ORD-1?") == "Order shipped."
+    assert len(fake_llm.captured_messages) == 2
 
 
-def test_transport_timeout_has_one_boundary_error() -> None:
-    class TimeoutClient(RecordingClient):
-        def chat(self, **kwargs: Any) -> dict[str, Any]:
-            raise ReadTimeout("timed out")
+def test_transport_error_raises_ollama_unavailable() -> None:
+    fake_llm = FakeChatModel(response=RuntimeError("connection refused"))
+    gateway = ChatOpenAIAdapter(llm=fake_llm)
 
-    gateway = OllamaGateway(
-        TimeoutClient(),
-        generation_model="gpt-oss:20b",
-        embedding_model="nomic-embed-text",
-    )
-
-    with pytest.raises(OllamaUnavailable, match="Ollama request failed"):
-        gateway.text(system="Answer", user="question")
+    with pytest.raises(OllamaUnavailable, match="LLM request failed"):
+        gateway.text(system="System", user="Hello")
 
 
-def test_invalid_schema_output_has_one_boundary_error() -> None:
-    class InvalidClient(RecordingClient):
-        def chat(self, **kwargs: Any) -> dict[str, Any]:
-            return {"message": {"content": "not JSON"}}
+def test_invalid_structured_output_raises_structured_output_invalid() -> None:
+    class FailingFake(FakeChatModel):
+        def with_structured_output(self, schema: type[Any]) -> Any:
+            return FakeStructuredModel({"invalid_field": "unknown"})
 
-    gateway = OllamaGateway(
-        InvalidClient(),
-        generation_model="gpt-oss:20b",
-        embedding_model="nomic-embed-text",
-    )
+    gateway = ChatOpenAIAdapter(llm=FailingFake())
 
     with pytest.raises(StructuredOutputInvalid):
         gateway.structured(system="Classify", user="offers", schema=Output)
 
 
-def test_chat_with_tools_normalizes_tool_calls() -> None:
-    class FakeClient:
-        def __init__(self) -> None:
-            self.captured: dict[str, Any] = {}
-
-        def chat(self, **kwargs: Any) -> dict[str, Any]:
-            self.captured = kwargs
-            return {
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": "get_order_status",
-                                "arguments": {"order_id": "ORD-1"},
-                            }
-                        }
-                    ],
-                }
-            }
-
-    client = FakeClient()
-    gw = OllamaGateway(client, generation_model="m", embedding_model="e")
+def test_chat_with_tools_returns_ai_message() -> None:
+    response = AIMessage(
+        content="",
+        tool_calls=[{"name": "get_order_status", "args": {"order_id": "ORD-1"}, "id": "c1"}],
+    )
+    fake_llm = FakeChatModel(response=response)
+    gw = OllamaGateway(llm=fake_llm)
     tools = [
         {
             "type": "function",
@@ -126,19 +112,31 @@ def test_chat_with_tools_normalizes_tool_calls() -> None:
             },
         }
     ]
-    msg = gw.chat_with_tools(messages=[{"role": "user", "content": "where is ORD-1"}], tools=tools)
 
-    assert msg["tool_calls"] == [{"name": "get_order_status", "arguments": {"order_id": "ORD-1"}}]
-    assert client.captured["tools"] == tools
-    assert client.captured["messages"][0]["content"] == "where is ORD-1"
+    msg = gw.chat_with_tools(messages=[HumanMessage(content="where is ORD-1")], tools=tools)
+
+    assert msg.tool_calls[0]["name"] == "get_order_status"
+    assert msg.tool_calls[0]["args"] == {"order_id": "ORD-1"}
+    assert msg.tool_calls[0]["id"] == "c1"
+    assert fake_llm.bound_tools == tools
 
 
-def test_chat_with_tools_returns_empty_tool_calls_for_plain_answer() -> None:
-    class FakeClient:
-        def chat(self, **kwargs: Any) -> dict[str, Any]:
-            return {"message": {"role": "assistant", "content": "Hello."}}
+def test_hugging_face_embedder_wraps_backend() -> None:
+    fake_backend = FakeEmbeddingsBackend()
+    embedder = HuggingFaceEmbedder(embeddings_instance=fake_backend)
 
-    gw = OllamaGateway(FakeClient(), generation_model="m", embedding_model="e")
-    msg = gw.chat_with_tools(messages=[{"role": "user", "content": "hi"}], tools=[])
-    assert msg["content"] == "Hello."
-    assert msg["tool_calls"] == []
+    results = embedder.embed(["test doc 1", "test doc 2"])
+
+    assert len(results) == 2
+    assert results[0] == [1.0, 0.0]
+    assert fake_backend.calls == [["test doc 1", "test doc 2"]]
+
+
+def test_chat_openai_adapter_embed_delegates_to_embedder() -> None:
+    fake_backend = FakeEmbeddingsBackend()
+    embedder = HuggingFaceEmbedder(embeddings_instance=fake_backend)
+    gw = ChatOpenAIAdapter(llm=FakeChatModel(), embedder=embedder)
+
+    results = gw.embed(["sample"])
+
+    assert results == [[1.0, 0.0]]

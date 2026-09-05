@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import ollama
-
 from pwc_support.config import Settings
-from pwc_support.llm.ollama import OllamaGateway
+from pwc_support.llm.embeddings import HuggingFaceEmbedder
+from pwc_support.llm.ollama import ChatOpenAIAdapter
 from pwc_support.rag.ingest import (
     ChunkingConfig,
     MetadataContextualizer,
@@ -30,22 +29,17 @@ def main() -> None:
     args = parser.parse_args()
     settings = Settings.from_env().with_retrieval_config(Path("config/retrieval.json"))
     root = Path(__file__).parents[1] / "corpus"
-    ollama_client = ollama.Client(
-        host=settings.ollama_base_url,
-        timeout=settings.request_timeout_seconds,
-    )
-    gateway = OllamaGateway(
-        ollama_client,
+    embedder = HuggingFaceEmbedder(model_name=settings.embedding_model)
+    generator = ChatOpenAIAdapter(
         generation_model=settings.generation_model,
-        embedding_model=settings.embedding_model,
-        num_ctx=settings.num_ctx,
-        schema_tokens=settings.schema_tokens,
-        max_parallel_generations=settings.max_parallel_generations,
+        base_url=settings.ollama_base_url,
+        request_timeout_seconds=settings.request_timeout_seconds,
+        embedder=embedder,
     )
     store = ChromaKnowledgeBase(
         chroma_client(settings),
         settings.collection_name,
-        gateway,
+        embedder,
         LexicalIndex(settings.lexical_db),
     )
     if args.delete_source:
@@ -57,7 +51,7 @@ def main() -> None:
         MetadataContextualizer()
         if args.metadata_context_only
         else ModelContextualizer(
-            gateway,
+            generator,
             max_document_chars=settings.context_document_max_chars,
         )
     )
