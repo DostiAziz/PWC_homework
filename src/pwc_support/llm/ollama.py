@@ -90,9 +90,26 @@ class OllamaGateway:
         options: dict[str, float | int] = {"temperature": temperature, "num_predict": max_tokens}
         if self.num_ctx is not None:
             options["num_ctx"] = self.num_ctx
+        formatted_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("tool_calls"):
+                calls = [
+                    call
+                    if "function" in call
+                    else {
+                        "function": {
+                            "name": call.get("name", ""),
+                            "arguments": call.get("arguments", {}),
+                        }
+                    }
+                    for call in msg["tool_calls"]
+                ]
+                formatted_messages.append({**msg, "tool_calls": calls})
+            else:
+                formatted_messages.append(msg)
         request: dict[str, Any] = {
             "model": self.generation_model,
-            "messages": messages,
+            "messages": formatted_messages,
             "options": options,
         }
         if tools:

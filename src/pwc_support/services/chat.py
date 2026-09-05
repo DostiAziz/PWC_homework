@@ -46,6 +46,7 @@ class AgentService:
                 message=value.get("summary", "") + "? Please answer yes or no.",
                 awaiting_confirmation=True,
                 preview=value.get("summary", ""),
+                steps=("cancel_order",),
                 total_duration_ms=self._ms(started),
             )
         return ChatReply(

@@ -9,10 +9,9 @@
     "sources": 1.0,
     "terms": 1.0,
     "safety": 1.0,
-    "attribution": 1.0,
-    "conversation": 1.0
+    "attribution": 1.0
   },
-  "elapsed_seconds": 109.48,
+  "elapsed_seconds": 54.8,
   "results": [
     {
       "id": "greeting",
@@ -22,13 +21,12 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Hello. Ask me about products, offers, shipping, warranty, an order, or cancelling an eligible order.",
-      "task_kinds": [],
+      "answer": "Hello! How can I help you today?",
+      "steps": [],
       "cited_sources": [],
-      "latency_ms": 4.97
+      "latency_ms": 903.83
     },
     {
       "id": "product-search",
@@ -38,15 +36,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "City Parka: 99.99 EUR, 3 in stock\nTrail Shell: 129.99 EUR, 11 in stock",
-      "task_kinds": [
-        "catalogue"
+      "answer": "**Available jackets**\n\n| Product | Price | Stock |\n|---------|-------|-------|\n| City Parka | 99.99\u202fEUR | 3 in stock |\n| Trail Shell | 129.99\u202fEUR | 11 in stock |",
+      "steps": [
+        "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 12647.76
+      "latency_ms": 2027.08
     },
     {
       "id": "active-offers",
@@ -56,15 +53,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Trail Shell (PROD-1001): 116.99 EUR, 10% off",
-      "task_kinds": [
-        "catalogue"
+      "answer": "**Jacket offers**\n\n- Trail Shell (PROD\u20111001): 116.99\u202fEUR, 10\u202f% off.",
+      "steps": [
+        "list_offers"
       ],
       "cited_sources": [],
-      "latency_ms": 2671.94
+      "latency_ms": 3718.47
     },
     {
       "id": "no-product-match",
@@ -74,15 +70,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "No available products matched your request.",
-      "task_kinds": [
-        "catalogue"
+      "answer": "I\u2019m sorry, but we don\u2019t have any telescopes in our current catalog.",
+      "steps": [
+        "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 3887.2
+      "latency_ms": 2029.63
     },
     {
       "id": "order-status",
@@ -92,15 +87,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Order ORD-5001 is shipped.",
-      "task_kinds": [
-        "order"
+      "answer": "Order **ORD-5001** is currently shipped.",
+      "steps": [
+        "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 3455.82
+      "latency_ms": 2593.08
     },
     {
       "id": "order-id-missing",
@@ -110,15 +104,12 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Please provide the order ID or order number, for example ORD-2001.",
-      "task_kinds": [
-        "order"
-      ],
+      "answer": "Could you please provide your order ID so I can check its status?",
+      "steps": [],
       "cited_sources": [],
-      "latency_ms": 2445.05
+      "latency_ms": 1688.85
     },
     {
       "id": "cross-customer-order",
@@ -128,15 +119,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "I could not find that order for this customer.",
-      "task_kinds": [
-        "order"
+      "answer": "I couldn\u2019t find that order for this customer.",
+      "steps": [
+        "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 5713.64
+      "latency_ms": 2437.59
     },
     {
       "id": "cancel-preview",
@@ -146,15 +136,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
       "answer": "Cancel order ORD-2001 for 79.99 EUR? Please answer yes or no.",
-      "task_kinds": [
-        "order"
+      "steps": [
+        "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 10719.37
+      "latency_ms": 1557.53
     },
     {
       "id": "cancel-confirm",
@@ -164,15 +153,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
       "answer": "Order ORD-4001 has been cancelled.",
-      "task_kinds": [
-        "order"
+      "steps": [
+        "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 22.51
+      "latency_ms": 2209.07
     },
     {
       "id": "cancel-ineligible",
@@ -182,15 +170,14 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Order ORD-5001 cannot be cancelled because it has already shipped.",
-      "task_kinds": [
-        "order"
+      "answer": "I\u2019m sorry, but order ORD-5001 cannot be cancelled because it has already shipped.",
+      "steps": [
+        "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 7113.46
+      "latency_ms": 2627.92
     },
     {
       "id": "shipping-time",
@@ -200,18 +187,17 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
       "answer": "Standard shipping typically takes three to five business days. [S1]",
-      "task_kinds": [
-        "knowledge"
+      "steps": [
+        "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy",
         "shipping-and-orders"
       ],
-      "latency_ms": 7769.03
+      "latency_ms": 3082.52
     },
     {
       "id": "cancellation-policy",
@@ -221,18 +207,17 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
       "answer": "An order can be cancelled while it is still processing and has not yet shipped. The customer must confirm the cancellation before the order is changed. Once an order has shipped, been delivered, or was already cancelled, it cannot be cancelled through the chatbot. [S1][S4]",
-      "task_kinds": [
-        "knowledge"
+      "steps": [
+        "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy",
         "shipping-and-orders"
       ],
-      "latency_ms": 6977.76
+      "latency_ms": 4942.44
     },
     {
       "id": "warranty-period",
@@ -242,18 +227,17 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
       "answer": "The product comes with a two\u2011year limited warranty that covers manufacturing defects. [S2]",
-      "task_kinds": [
-        "knowledge"
+      "steps": [
+        "search_policies"
       ],
       "cited_sources": [
         "shipping-and-orders",
         "warranty-and-support"
       ],
-      "latency_ms": 6919.23
+      "latency_ms": 3494.61
     },
     {
       "id": "out-of-scope",
@@ -263,15 +247,12 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "I could not find grounded policy information for that question. Our retail support documents do not contain that information.",
-      "task_kinds": [
-        "knowledge"
-      ],
+      "answer": "I\u2019m sorry, but I can\u2019t help with that.",
+      "steps": [],
       "cited_sources": [],
-      "latency_ms": 4972.61
+      "latency_ms": 2258.46
     },
     {
       "id": "compound-catalogue-rag",
@@ -281,19 +262,18 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Trail Shell (PROD-1001): 116.99 EUR, 10% off\n\nStandard shipping typically takes three to five business days. [S1]",
-      "task_kinds": [
-        "catalogue",
-        "knowledge"
+      "answer": "**Jacket offers**\n\n- Trail Shell (PROD\u20111001): 116.99\u202fEUR, 10\u202f% off\n\n**Standard shipping**\n\nStandard shipping typically takes three to five business days. [S1]",
+      "steps": [
+        "list_offers",
+        "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy",
         "shipping-and-orders"
       ],
-      "latency_ms": 10893.89
+      "latency_ms": 6910.11
     },
     {
       "id": "compound-order-rag",
@@ -303,19 +283,19 @@
         "sources": true,
         "terms": true,
         "safety": true,
-        "attribution": true,
-        "conversation": true
+        "attribution": true
       },
-      "answer": "Order ORD-5001 is shipped.\n\n**Cancellation policy**\n\n- **Eligible orders**: An order can be cancelled while it is still processing and has not shipped. The customer must confirm the cancellation before the order is changed. [S1]  \n- **Ineligible orders**: Orders that have already shipped, been delivered, or were previously cancelled cannot be cancelled through the chatbot. [S2]",
-      "task_kinds": [
-        "knowledge",
-        "order"
+      "answer": "ORD\u20115001 has already shipped.  \n\n**Cancellation policy**  \n- An order can be cancelled only while it is still processing and has not yet shipped. The customer must confirm the cancellation before the order is changed. [S1]  \n- Orders that have already shipped, been delivered, or were previously cancelled cannot be cancelled through the chatbot. [S3]",
+      "steps": [
+        "get_order_status",
+        "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy",
-        "shipping-and-orders"
+        "shipping-and-orders",
+        "warranty-and-support"
       ],
-      "latency_ms": 15308.13
+      "latency_ms": 11413.12
     }
   ]
 }
