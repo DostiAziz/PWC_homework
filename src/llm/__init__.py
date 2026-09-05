@@ -1,20 +1,21 @@
 """Local LLM and embedding integrations."""
 
-from llm.embeddings import HuggingFaceEmbedder, get_embeddings
+from llm.embeddings import (
+    embedding_dimension,
+    get_embeddings,
+    validate_collection_dimension,
+)
 from llm.ollama import (
-    ChatOpenAIAdapter,
-    OllamaGateway,
+    LimitedChatModel,
     OllamaUnavailable,
-    StructuredOutputInvalid,
     get_chat_model,
 )
 
 __all__ = [
-    "ChatOpenAIAdapter",
-    "HuggingFaceEmbedder",
-    "OllamaGateway",
+    "LimitedChatModel",
     "OllamaUnavailable",
-    "StructuredOutputInvalid",
+    "embedding_dimension",
     "get_chat_model",
     "get_embeddings",
+    "validate_collection_dimension",
 ]

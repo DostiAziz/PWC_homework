@@ -100,10 +100,6 @@ class RetrievalBatch(DomainModel):
 class RagRequest(DomainModel):
     question: Annotated[str, StringConstraints(min_length=1, max_length=4000)]
     language: Literal["en"] = "en"
-    sector: str | None = None
-    service_line: str | None = None
-    territory: str | None = None
-    triage_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class RagResult(DomainModel):
