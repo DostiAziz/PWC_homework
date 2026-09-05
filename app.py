@@ -79,7 +79,11 @@ if question := st.chat_input("Ask about products, offers, policies, or your orde
     st.session_state.messages.append({"role": "user", "content": question})
     with st.spinner("Running locally"):
         if st.session_state.awaiting_confirmation:
-            reply = runtime.service.resume(thread_id=st.session_state.thread_id, decision=question)
+            reply = runtime.service.resume(
+                thread_id=st.session_state.thread_id,
+                customer_id=st.session_state.customer_id,
+                decision=question,
+            )
         else:
             reply = runtime.service.submit(
                 thread_id=st.session_state.thread_id,

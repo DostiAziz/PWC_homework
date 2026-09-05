@@ -100,7 +100,11 @@ def run(path: Path) -> dict[str, Any]:
             turns = case.get("turns", [case.get("question", "")])
             for turn in turns:
                 if reply is not None and reply.awaiting_confirmation:
-                    reply = service.resume(thread_id=thread_id, decision=str(turn))
+                    reply = service.resume(
+                        thread_id=thread_id,
+                        customer_id=customer_id,
+                        decision=str(turn),
+                    )
                 else:
                     reply = service.submit(
                         thread_id=thread_id, body=str(turn), customer_id=customer_id

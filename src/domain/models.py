@@ -51,7 +51,14 @@ class CancellationPreview(DomainModel):
     order_id: str
     customer_id: str
     expected_version: int = Field(ge=1)
+    expected_total: Decimal = Field(default=Decimal("79.99"), ge=0)
+    expected_currency: str = Field(default="EUR")
     summary: str
+
+
+class PendingCancellation(DomainModel):
+    tool_call_id: str
+    preview: CancellationPreview
 
 
 class CancellationResult(DomainModel):
@@ -115,3 +122,11 @@ class ChatReply(DomainModel):
     awaiting_confirmation: bool = False
     preview: str = ""
     total_duration_ms: float = Field(ge=0, default=0.0)
+    status: Literal[
+        "answered",
+        "awaiting_confirmation",
+        "insufficient_evidence",
+        "unavailable",
+        "iteration_limit",
+        "invalid_request",
+    ] = "answered"

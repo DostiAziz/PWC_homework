@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any
+from threading import Lock
+from typing import Any, Literal
 
 from langgraph.types import Command
 
@@ -15,14 +16,53 @@ logger = logging.getLogger(__name__)
 class AgentService:
     def __init__(self, graph: Any) -> None:
         self.graph = graph
+        self._thread_owners: dict[str, str] = {}
+        self._awaiting_threads: set[str] = set()
+        self._thread_locks: dict[str, Lock] = {}
+        self._global_lock = Lock()
+
+    def _get_lock(self, thread_id: str) -> Lock:
+        with self._global_lock:
+            if thread_id not in self._thread_locks:
+                self._thread_locks[thread_id] = Lock()
+            return self._thread_locks[thread_id]
 
     def submit(self, *, body: str, customer_id: str, thread_id: str | None = None) -> ChatReply:
         tid = thread_id or str(uuid.uuid4())
-        payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
-        return self._run(payload, tid)
+        with self._get_lock(tid):
+            owner = self._thread_owners.get(tid)
+            if owner is not None and owner != customer_id:
+                return ChatReply(
+                    message="Access denied: conversation belongs to another customer.",
+                    status="invalid_request",
+                )
+            if tid in self._awaiting_threads:
+                return ChatReply(
+                    message=(
+                        "A confirmation is already pending for this conversation. "
+                        "Please answer yes or no."
+                    ),
+                    awaiting_confirmation=True,
+                    status="awaiting_confirmation",
+                )
+            self._thread_owners[tid] = customer_id
+            payload = {"messages": [{"role": "user", "content": body}], "customer_id": customer_id}
+            return self._run(payload, tid)
 
-    def resume(self, *, thread_id: str, decision: str) -> ChatReply:
-        return self._run(Command(resume=decision), thread_id)
+    def resume(self, *, thread_id: str, customer_id: str, decision: str) -> ChatReply:
+        with self._get_lock(thread_id):
+            owner = self._thread_owners.get(thread_id)
+            if owner is None:
+                return ChatReply(
+                    message="The session has expired or is invalid. Please submit a new request.",
+                    status="invalid_request",
+                )
+            if owner != customer_id:
+                return ChatReply(
+                    message="Access denied: conversation belongs to another customer.",
+                    status="invalid_request",
+                )
+            return self._run(Command(resume=decision), thread_id)
 
     def _run(self, payload: Any, thread_id: str) -> ChatReply:
         started = time.perf_counter()
@@ -33,22 +73,40 @@ class AgentService:
             logger.exception("agent failed", extra={"thread_id": thread_id})
             return ChatReply(
                 message="The support agent is unavailable. Please try again.",
+                status="unavailable",
                 total_duration_ms=self._ms(started),
             )
         interrupts = terminal.get("__interrupt__")
         if interrupts:
+            self._awaiting_threads.add(thread_id)
             value = interrupts[0].value
             return ChatReply(
                 message=value.get("summary", "") + "? Please answer yes or no.",
                 awaiting_confirmation=True,
                 preview=value.get("summary", ""),
                 steps=("cancel_order",),
+                status="awaiting_confirmation",
                 total_duration_ms=self._ms(started),
             )
+        self._awaiting_threads.discard(thread_id)
+        status: Literal[
+            "answered",
+            "awaiting_confirmation",
+            "insufficient_evidence",
+            "unavailable",
+            "iteration_limit",
+            "invalid_request",
+        ] = "answered"
+        if terminal.get("iteration_limit"):
+            status = "iteration_limit"
+        elif terminal.get("status") == "insufficient_evidence":
+            status = "insufficient_evidence"
+
         return ChatReply(
             message=str(terminal.get("response", "")),
             citations=tuple(terminal.get("citations", ())),
             steps=tuple(terminal.get("steps", ())),
+            status=status,
             total_duration_ms=self._ms(started),
         )
 

@@ -94,12 +94,20 @@ class OrderRepository:
 
     def cancel(self, preview: CancellationPreview) -> CancellationResult:
         now = datetime.now(UTC).isoformat()
-        with self.database.connect() as connection:
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
             action = connection.execute(
-                "SELECT status FROM cancellation_actions WHERE confirmation_token = ?",
+                "SELECT order_id, customer_id, status FROM cancellation_actions "
+                "WHERE confirmation_token = ?",
                 (preview.confirmation_token,),
             ).fetchone()
             if action:
+                if (
+                    action["order_id"] != preview.order_id
+                    or action["customer_id"] != preview.customer_id
+                ):
+                    raise CancellationConflict("token mismatch for order or customer")
                 return CancellationResult(
                     order_id=preview.order_id,
                     status="cancelled",
@@ -107,8 +115,17 @@ class OrderRepository:
                 )
             cursor = connection.execute(
                 "UPDATE orders SET status = 'cancelled', cancelled_at = ?, version = version + 1 "
-                "WHERE order_id = ? AND customer_id = ? AND version = ? AND status != 'cancelled'",
-                (now, preview.order_id, preview.customer_id, preview.expected_version),
+                "WHERE order_id = ? AND customer_id = ? AND version = ? "
+                "  AND total = ? AND currency = ? "
+                "  AND status IN ('processing', 'paid') AND fulfilment_status = 'processing'",
+                (
+                    now,
+                    preview.order_id,
+                    preview.customer_id,
+                    preview.expected_version,
+                    float(preview.expected_total),
+                    preview.expected_currency,
+                ),
             )
             if cursor.rowcount == 0:
                 raise CancellationConflict("order changed before cancellation")
@@ -118,6 +135,13 @@ class OrderRepository:
                 "VALUES (?, ?, ?, 'cancelled', ?, ?)",
                 (preview.confirmation_token, preview.order_id, preview.customer_id, now, now),
             )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
         return CancellationResult(
             order_id=preview.order_id,
             status="cancelled",
