@@ -10,12 +10,11 @@ from pwc_support.llm.ollama import OllamaGateway
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.rag.lexical import LexicalIndex
 from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
-from pwc_support.services.chat import ChatService
+from pwc_support.services.chat import AgentService
 from pwc_support.storage.database import Database
 from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
-from pwc_support.workflow.commerce import CommerceTools
-from pwc_support.workflow.graph import build_graph
-from pwc_support.workflow.planner import OllamaPlanner
+from pwc_support.workflow.agent_graph import build_agent_graph
+from pwc_support.workflow.tools import ToolRegistry
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
 
@@ -23,7 +22,7 @@ RETRIEVAL_CONFIG = Path("config/retrieval.json")
 @dataclass(frozen=True, slots=True)
 class Runtime:
     settings: Settings
-    service: ChatService
+    service: AgentService
     database: Database
     knowledge_base: ChromaKnowledgeBase
 
@@ -61,14 +60,11 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
         max_evidence_chars=resolved.max_evidence_chars,
         answer_tokens=resolved.answer_tokens,
     )
-    graph = build_graph(
-        planner=OllamaPlanner(model),
-        commerce=CommerceTools(ProductRepository(database), OrderRepository(database)),
-        rag_answerer=rag_answerer,
-    )
+    registry = ToolRegistry(ProductRepository(database), OrderRepository(database), rag_answerer)
+    graph = build_agent_graph(model=model, registry=registry)
     return Runtime(
         settings=resolved,
-        service=ChatService(graph),
+        service=AgentService(graph),
         database=database,
         knowledge_base=knowledge_base,
     )

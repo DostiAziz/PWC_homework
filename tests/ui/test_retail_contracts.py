@@ -8,11 +8,12 @@ def test_ui_is_one_natural_language_chat() -> None:
     assert "st.tabs" not in source
     assert "Simulated email" not in source
     assert "Human review" not in source
-    assert "Order ID" not in source
 
 
-def test_ui_keeps_pending_cancellation_in_session() -> None:
+def test_ui_routes_confirmation_via_resume() -> None:
     source = Path("app.py").read_text(encoding="utf-8")
 
-    assert '"pending_cancellation"' in source
-    assert "reply.pending_cancellation" in source
+    assert '"awaiting_confirmation"' in source
+    assert "reply.awaiting_confirmation" in source
+    assert "runtime.service.resume" in source
+    assert "thread_id" in source
