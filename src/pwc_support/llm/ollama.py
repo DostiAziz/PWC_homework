@@ -79,6 +79,44 @@ class OllamaGateway:
         except ValidationError as error:
             raise StructuredOutputInvalid("Ollama response does not match schema") from error
 
+    def chat_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        max_tokens: int = 512,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        options: dict[str, float | int] = {"temperature": temperature, "num_predict": max_tokens}
+        if self.num_ctx is not None:
+            options["num_ctx"] = self.num_ctx
+        request: dict[str, Any] = {
+            "model": self.generation_model,
+            "messages": messages,
+            "options": options,
+        }
+        if tools:
+            request["tools"] = tools
+        try:
+            with self.generation_slots:
+                response = self.client.chat(**request)
+            message = response["message"]
+        except (HTTPError, ollama.RequestError, ollama.ResponseError, KeyError, TypeError) as error:
+            raise OllamaUnavailable("Ollama tool chat failed") from error
+        raw_calls = message.get("tool_calls") or []
+        tool_calls = [
+            {
+                "name": call["function"]["name"],
+                "arguments": dict(call["function"].get("arguments") or {}),
+            }
+            for call in raw_calls
+        ]
+        return {
+            "role": "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": tool_calls,
+        }
+
     def _chat(
         self,
         *,
