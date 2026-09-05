@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
+RUN pip install --no-cache-dir uv==0.5.11 && uv sync --frozen --no-dev
 
 COPY src ./src
 COPY scripts ./scripts

@@ -1,59 +1,66 @@
 # Local Agentic RAG Retail Customer Support
 
-A local Python + LangGraph retail customer support assistant that answers product, offer, order, and policy questions by routing between SQLite retail tables and a grounded four-node RAG subgraph.
+An enterprise-ready, locally hosted retail customer support AI assistant built with Python, LangGraph, and Ollama. The assistant resolves customer queries across product catalogues, promotional discounts, order tracking, and retail store policies by orchestrating between a local SQLite database and a grounded hybrid RAG subgraph with citation verification.
 
-Everything runs locally: local Ollama inference, local Chroma vector store, local SQLite relational database, and a single Streamlit chat UI.
+Everything runs 100% locally on your machine with zero external API calls:
+- **Generation**: `gpt-oss:20b` running locally on [Ollama](https://ollama.com/)
+- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional dense vectors) via Hugging Face
+- **Relational Data**: Local SQLite (`retail-support-v1.sqlite3`) for orders, products, inventory, and promotions
+- **Policy Knowledge Base**: Hybrid ChromaDB vector search + SQLite BM25 lexical search with Reciprocal Rank Fusion (RRF)
+- **User Interface**: Streamlit web chat application with live human-in-the-loop confirmation gates
 
 ---
 
 ## Contents
 
-- [Architecture](#architecture)
+- [System Architecture](#system-architecture)
 - [Data Partitioning: SQLite vs RAG](#data-partitioning-sqlite-vs-rag)
-- [Cancellation Safety](#cancellation-safety)
-- [Local Setup](#local-setup)
+- [Order Cancellation & Safety Invariants](#order-cancellation--safety-invariants)
+- [Local Setup and Quickstart](#local-setup-and-quickstart)
 - [Docker Deployment](#docker-deployment)
-- [Project Layout and Code Complexity](#project-layout-and-code-complexity)
-- [Functional Evaluation Results](#functional-evaluation-results)
-- [Load Benchmark and Bottleneck Analysis](#load-benchmark-and-bottleneck-analysis)
-- [Known Limitations](#known-limitations)
+- [Corpus Ingestion and Index Maintenance](#corpus-ingestion-and-index-maintenance)
+- [Functional Evaluation Framework](#functional-evaluation-framework)
+- [Load Benchmarking & Bottleneck Analysis](#load-benchmarking--bottleneck-analysis)
+- [PDF Requirement-to-Evidence Matrix](#pdf-requirement-to-evidence-matrix)
+- [Known Prototype Boundaries](#known-prototype-boundaries)
 
 ---
 
-## Architecture
+## System Architecture
 
-The system is organized as a 5-node LangGraph tool-calling agent with a nested 4-node RAG subgraph, managed by an in-memory `MemorySaver` checkpointer:
+The assistant uses a 5-node LangGraph tool-calling agent with a nested 4-node RAG subgraph, managed by an in-memory `MemorySaver` checkpointer:
 
 ```text
-Streamlit chat -> AgentService (thread_id)
+Streamlit chat -> AgentService (thread_id, customer_id)
                      |
-START -> intake -> agent <-------------------.
-                     |                        |
-                     |-- tool_calls (non-cancel) -> tools ->'
-                     |-- cancel_order ----------> confirm (interrupt) ->'
-                     `-- final answer ----------> respond -> END
+START -> intake -> agent <----------------------------.
+                     |                                |
+                     |-- tool_calls (non-cancellation) -> tools ->'
+                     |-- cancel_order ---------------> confirm (interrupt) ->'
+                     `-- final answer ---------------> respond -> END
 ```
 
 ### Main Graph Nodes (5 nodes)
 
-1. **`intake`**: Seeds system instructions on new threads and passes user messages through to the conversation history.
-2. **`agent`**: The single decision-making LLM brain (`gpt-oss:20b`). It receives conversation history and tool schemas, chooses which tool(s) to call, or synthesizes the final user-facing answer.
-3. **`tools`**: Dispatches read tools selected by the agent:
+1. **`intake`**: Initializes system instructions on new threads, enforces customer ID binding, and cleans per-turn citation/trace metadata.
+2. **`agent`**: The decision-making LLM brain (`gpt-oss:20b`). It analyzes conversation context, decides whether to call tools or answer directly, and formats final customer responses.
+3. **`tools`**: Dispatches domain tools chosen by the agent without dropping compound calls:
    - `search_products(query)`: Full catalogue search over SQLite.
    - `list_offers(category?)`: Active promotional discounts over SQLite.
    - `get_order_status(order_id)`: Customer-scoped order lookup over SQLite.
-   - `search_policies(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation verification.
-4. **`confirm`**: Human-in-the-loop safety gate for `cancel_order(order_id)`. Builds an atomic cancellation preview and raises a LangGraph `interrupt()`. Mutates state in SQLite only upon explicit user `"yes"` resume; otherwise reports refusal back to the agent.
-5. **`respond`**: Extracts the assistant's final response and passes verified citations to the UI.
+   - `search_policies(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation attribution.
+4. **`confirm`**: Safety gate for `cancel_order(order_id)`. Builds an immutable `CancellationPreview` and raises a LangGraph `interrupt()`. Mutates state in SQLite only upon explicit user `"yes"` confirmation; otherwise reports refusal back to the agent.
+5. **`respond`**: Verifies that citations in the agent's final text correspond to retrieved policy evidence, translates formatting markers, and emits the final `ChatReply`.
 
 ### RAG Subgraph Nodes (4 nodes)
 
 Invoked directly by the `search_policies` tool:
-- **`prepare_query`**: Strips punctuation and builds lexical + semantic query representation.
+- **`prepare_query`**: Sanitizes punctuation and prepares lexical and semantic representations.
 - **`retrieve_candidates`**: Hybrid retrieval combining Chroma cosine similarity and SQLite BM25 lexical search with Reciprocal Rank Fusion (RRF).
 - **`select_evidence`**: Filters candidates against `minimum_similarity` (0.45) and token budget; generates typed citations.
-- **`answer_with_citations`**: Prompts the generation model with strict citation markers `[S1]`, lookalike bracket translation, and attribution validation.
+- **`answer_with_citations`**: Prompts the generation model with strict citation markers `[S#]`, translates brackets, and verifies attribution.
 
+See [`docs/architecture.md`](docs/architecture.md) for full architectural specifications.
 
 ---
 
@@ -67,189 +74,172 @@ Invoked directly by the `search_policies` tool:
 
 ---
 
-## Cancellation Safety
+## Order Cancellation & Safety Invariants
 
-Order cancellations alter customer state and are guarded by five safety invariants:
+Order cancellations modify persistent customer state and are guarded by five safety invariants:
 
-1. **Customer Scope**: Every query strictly includes `WHERE customer_id = ?`. A customer cannot view or cancel another customer's order.
-2. **Preview Before Mutation**: The assistant first looks up the order, calculates the total, checks status (`processing`), and requests confirmation: `"Cancel order ORD-2001 for 79.99 EUR? Please answer yes or no."`
-3. **Explicit Confirmation**: State is only changed when the user affirmatively replies `"yes"`. Any other answer leaves the order untouched.
-4. **Optimistic Locking**: Cancellation updates use version checks:
+1. **Customer-Scoped Authorization**: Every database query and update enforces `WHERE customer_id = ?`. A customer cannot view, preview, or cancel another customer's order.
+2. **Immutable Preview Before Mutation**: The assistant first retrieves the order, calculates expected totals, verifies status (`processing`), and requests confirmation: `"Cancel order ORD-2001 for 79.99 EUR? Please answer yes or no."`
+3. **Preview Authority**: The confirmation preview is generated solely by the deterministic `confirm` node and verified during resume. The LLM cannot hallucinate confirmation tokens or bypass the preview step.
+4. **Optimistic Locking & Atomic Mutation**: Cancellation executes inside an atomic `BEGIN IMMEDIATE` transaction matching order version, total, and status:
    ```sql
    UPDATE orders SET status = 'cancelled', version = version + 1
-   WHERE order_id = ? AND customer_id = ? AND version = ?
+   WHERE order_id = ? AND customer_id = ? AND version = ? AND status = 'processing'
    ```
 5. **Idempotency & Replay Protection**: Each confirmation token is inserted into `cancellation_actions` (`confirmation_token TEXT PRIMARY KEY`). Replayed tokens return the cached result rather than re-executing.
 
 ---
 
-## Local Setup
+## Local Setup and Quickstart
 
 ### Prerequisites
 
-- Python 3.12 (`uv` package manager recommended)
-- [Ollama](https://ollama.com/) running locally
+- macOS / Linux with Python 3.12
+- [`uv`](https://docs.astral.sh/uv/) package manager
+- [Ollama](https://ollama.com/) installed and running locally
 
-### Model Download
+### 1. Model Preparation
 
+Pull the generation model into Ollama:
 ```bash
 ollama pull gpt-oss:20b
-ollama pull nomic-embed-text
 ```
 
-### Installation and Bootstrapping
+Embeddings (`sentence-transformers/all-MiniLM-L6-v2`) are downloaded automatically by Hugging Face on first run and cached in `~/.cache/huggingface`.
+
+### 2. Dependency Synchronization
+
+Install project dependencies from the frozen lockfile:
+```bash
+uv sync --frozen
+```
+
+### 3. Environment Configuration
+
+Configuration is managed via environment variables with sensible defaults:
+- `OLLAMA_BASE_URL`: Ollama endpoint (default: `http://127.0.0.1:11434`)
+- `PWC_GENERATION_MODEL`: Generation model tag (default: `gpt-oss:20b`)
+- `PWC_EMBEDDING_MODEL`: Embedding model (default: `sentence-transformers/all-MiniLM-L6-v2`)
+- `PWC_DATA_DIR`: Base directory for SQLite and Chroma storage (default: `data`)
+- `PWC_MAX_PARALLEL_GENERATIONS`: Max concurrent generation requests (default: `1`)
+
+Copy example environment if customizations are needed:
+```bash
+cp .env.example .env
+```
+
+### 4. Initialization & Bootstrap
 
 ```bash
-# 1. Sync dependencies from frozen lockfile
-uv sync --frozen
+# Verify local Ollama runtime and generation model availability
+PYTHONPATH=src uv run python scripts/check_runtime.py
 
-# 2. Verify local Ollama runtime and models
-PYTHONPATH=src .venv/bin/python scripts/check_runtime.py
+# Initialize and seed retail SQLite tables
+PYTHONPATH=src uv run python scripts/seed_retail_data.py
 
-# 3. Initialize and seed SQLite retail tables
-PYTHONPATH=src .venv/bin/python scripts/seed_retail_data.py
-
-# 4. Ingest corpus into Chroma and BM25 index
-PYTHONPATH=src .venv/bin/python scripts/ingest_corpus.py
-
-# 5. Launch the Streamlit chat UI
-PYTHONPATH=src .venv/bin/streamlit run app.py
+# Ingest policy documents into Chroma and BM25 index
+PYTHONPATH=src uv run python scripts/ingest_corpus.py
 ```
 
-The application will be available at `http://localhost:8501`. Demo customer: `CUS-1001`.
+### 5. Launch the Application
+
+```bash
+PYTHONPATH=src uv run streamlit run app.py
+```
+Open `http://localhost:8501` in your browser. Demo customer `CUS-1001` is pre-selected.
 
 ---
 
 ## Docker Deployment
 
-The application runs in Docker while connecting to Ollama on the host:
+The application includes a complete container deployment that orchestrates the Chroma vector database, database setup, and Streamlit UI, connecting to Ollama running on the host machine.
 
 ```bash
-# Validate compose configuration
+# Validate Docker Compose configuration
 docker compose config
 
-# Build and start Chroma, setup job, and Streamlit app
-docker compose up --build
+# Build and start all services
+docker compose up --build -d
 ```
 
-- **`chroma`**: Chroma vector database container (port 8000).
-- **`setup`**: One-shot bootstrap container that seeds retail SQLite data and ingests corpus into Chroma.
-- **`app`**: Streamlit web chat UI (port 8501).
-- **Host Ollama**: App containers connect to host Ollama via `host.docker.internal:11434`.
+- **`chroma`**: Chroma vector database container (port 8000, configurable via `PWC_CHROMA_PORT`).
+- **`setup`**: Bootstrap container that seeds retail SQLite data and ingests corpus into Chroma.
+- **`app`**: Streamlit web chat UI (port 8501, configurable via `PWC_APP_PORT`).
+- **Host Ollama**: Containers connect to host Ollama via `host.docker.internal:11434`.
 
 ---
 
-## Project Layout and Code Complexity
+## Corpus Ingestion and Index Maintenance
 
-```text
-simple-agentic-rag/
-├── app.py                     # Streamlit single-chat UI (90 lines)
-├── compose.yaml               # Docker Compose specification
-├── Dockerfile                 # Multi-stage Python 3.12 Dockerfile
-├── pyproject.toml             # Project metadata and dependencies
-├── uv.lock                    # Frozen dependency lockfile
-├── config/
-│   └── retrieval.json         # Reviewable RAG tuning parameters
-├── corpus/                    # Retail policy markdown documents
-│   ├── cancellation-policy.md
-│   ├── shipping-and-orders.md
-│   └── warranty-and-support.md
-├── eval/                      # Evaluation datasets
-│   ├── development.jsonl      # 8 development test journeys
-│   ├── final.jsonl            # 16 frozen benchmark journeys
-│   └── load_workload.jsonl    # 10 read-only load queries
-├── scripts/                   # Operations & evaluation runners
-│   ├── check_runtime.py       # Pre-flight environment validation
-│   ├── ingest_corpus.py       # Chroma & lexical index ingestion
-│   ├── run_evaluation.py      # 6-criterion journey evaluation
-│   ├── run_load.py            # Concurrent benchmark runner
-│   └── seed_retail_data.py    # SQLite schema & seed fixture setup
-├── src/
-│   ├── bootstrap.py           # Dependency injection root (70 lines)
-│   ├── config.py              # Pydantic settings from env (86 lines)
-│   ├── domain/                # Domain models & state (185 lines)
-│   ├── llm/ollama.py          # Unified thin Ollama gateway (135 lines)
-│   ├── rag/                   # 4-node RAG subgraph & stores (726 lines)
-│   ├── services/chat.py       # Single chat service facade (60 lines)
-│   ├── storage/               # SQLite DB & repositories (146 lines)
-│   └── workflow/              # 5-node agent graph & tool registry (250 lines)
-└── tests/                     # 75 pytest unit & integration tests
+Policy documents are located in `corpus/` (`cancellation-policy.md`, `shipping-and-orders.md`, `warranty-and-support.md`).
+
+The ingestion pipeline (`scripts/ingest_corpus.py`):
+- Splits documents into deterministic token chunks with configurable overlap (`chunk_size_tokens=300`, `chunk_overlap_tokens=50`).
+- Embeds chunks using `sentence-transformers/all-MiniLM-L6-v2` with normalized cosine vectors.
+- Builds an inverted BM25 index in SQLite for exact term matching.
+- Supports full corpus reconciliation (`--full-reconciliation`): deletes unmanifested or deleted documents from both Chroma and BM25 indexes.
+
+```bash
+# Standard ingestion
+PYTHONPATH=src uv run python scripts/ingest_corpus.py
+
+# Re-indexing after document removal or modifications
+PYTHONPATH=src uv run python scripts/ingest_corpus.py --full-reconciliation
 ```
-
-### Production Code Complexity Reduction
-
-| Metric | Baseline (`c1a5c8b`) | Simple Agentic RAG | Delta |
-|---|---|---|---|
-| **Python lines in `src/`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
-| **LLM client integration** | Multi-file custom wrappers | `llm/ollama.py` (135 lines) | Unified single gateway with native tools |
-| **Workflow nodes** | Multi-agent supervisor tree | 5 agent nodes, 4 RAG nodes | Flat explicit StateGraph + tools loop |
-| **User interface** | 3 tabs + forms + case management | Single Streamlit chat (85 lines) | Focused conversational UI |
-| **SQLite Schema** | 15+ tables (cases, outbox, reviews) | 6 retail tables | Direct domain alignment |
 
 ---
 
-## Functional Evaluation Results
+## Functional Evaluation Framework
 
-Evaluated against the frozen 16-case benchmark in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each case is graded against 5 transparent criteria:
+The system is evaluated against the 20 frozen customer journeys in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each test case validates:
+1. **Tool Routing**: Agent selected the required tools (`search_products`, `list_offers`, `get_order_status`, `search_policies`, `cancel_order`) without calling forbidden tools.
+2. **Source Coverage**: Required policy documents are cited.
+3. **Business Term Assertions**: Expected pricing, order details, or policy terms are present; forbidden terms are absent.
+4. **Safety & Privacy**: Cross-customer order details are never disclosed; cancellations are blocked without confirmation.
+5. **Database State Verification**: Database assertions (e.g. order cancelled or unchanged) pass after turn completion.
+6. **Citation Attribution**: Every claim marker `[S#]` maps to retrieved evidence.
 
-1. **`routing`**: Agent called expected tool(s) (`search_products`, `list_offers`, `get_order_status`, `search_policies`, `cancel_order`) based on query intent.
-2. **`sources`**: Correct policy documents cited in response.
-3. **`terms`**: Expected product names, prices, or policy terms present; forbidden terms absent.
-4. **`safety`**: Cross-customer order information is never disclosed; cancellations are strictly gated behind confirmation.
-5. **`attribution`**: Every claim marker `[S#]` maps to retrieved evidence chunks.
+Execute the evaluation:
+```bash
+PYTHONPATH=src uv run python scripts/run_evaluation.py --cases eval/final.jsonl --output artifacts/evaluation/final-result.json
+```
 
-### Benchmark Summary (`artifacts/evaluation/final-result.json`)
+*(Detailed benchmark metrics will be recorded in `artifacts/evaluation/final-result.json` upon running Task 11.)*
 
-- **Model**: `gpt-oss:20b` (generation), `nomic-embed-text` (embeddings)
-- **Total Cases**: 16
-- **Passed**: 16 / 16
-- **Overall Accuracy**: **100.0%**
-- **Total Elapsed**: 54.8s (~3.4s per journey)
+---
 
-| Criterion | Accuracy | Status |
+## Load Benchmarking & Bottleneck Analysis
+
+Concurrency and throughput are measured using `scripts/run_load.py` over 100 requests (50 at concurrency 1, 50 at concurrency 2) with real component span timings:
+
+```bash
+PYTHONPATH=src uv run python scripts/run_load.py --requests 50 --concurrency 1 2 --output artifacts/load/local-result.json
+```
+
+*(Detailed latency, throughput, and bottleneck profiling will be recorded in `artifacts/load/local-result.json` upon running Task 11.)*
+
+---
+
+## PDF Requirement-to-Evidence Matrix
+
+| Requirement | Architecture & Code Implementation | Verification & Evidence Artifact |
 |---|---|---|
-| Tool Routing | 100.0% | PASS |
-| Source Coverage | 100.0% | PASS |
-| Business Terms | 100.0% | PASS |
-| Safety & Confirmation Gate | 100.0% | PASS |
-| Citation Attribution | 100.0% | PASS |
-
-
----
-
-## Load Benchmark and Bottleneck Analysis
-
-Measured using `scripts/run_load.py` with the customer workload in `eval/load_workload.jsonl`.
-
-### Benchmark Results (`artifacts/load/local-result.json`)
-
-| Metric | Concurrency 1 | Concurrency 2 | Factor |
-|---|---|---|---|
-| **Throughput** | 0.432 req/s | 0.445 req/s | 1.03x |
-| **Failures** | 0 (0.0%) | 0 (0.0%) | - |
-| **Latency p50** | 2,028 ms | 2,879 ms | 1.42x |
-| **Latency p95** | 3,712 ms | 6,107 ms | **1.64x** |
-| **Latency p99** | 3,712 ms | 6,107 ms | 1.64x |
-
-### Node Profiling
-
-| Node | Mean Time | Total Time | Share of Measured Time |
-|---|---|---|---|
-| **`agent`** (LLM inference) | 2,313 ms | 9.25s | **100.0%** (Bottleneck) |
-
-### Bottleneck Analysis and Recommendations
-
-1. **Measured Bottleneck**: The `agent` node accounts for the execution time as `gpt-oss:20b` generates reasoning tokens and tool arguments natively.
-2. **Concurrency Impact**: Adding concurrency from 1 to 2 increases p95 latency by **1.64x** with negligible throughput gain (+3%). Because local Ollama runs on a single unified memory GPU, concurrent generations queue behind generation slots.
-3. **Recommendation 1**: Benchmark smaller tool-calling models (e.g. `qwen3.5:9b` or `llama3.2:3b`) against the 16-case frozen evaluation to lower per-turn latency.
-4. **Recommendation 2**: Keep `RETAIL_MAX_PARALLEL_GENERATIONS=1` on single-GPU local deployments to avoid queue congestion and p95 latency inflation without throughput benefits.
+| **Local Model Deployment** | `src/llm/ollama.py`, `src/config.py` (`gpt-oss:20b`, MiniLM) | `scripts/check_runtime.py`, `tests/unit/llm/test_ollama.py` |
+| **Relational Data Routing** | `src/storage/retail_repositories.py`, `src/workflow/tools.py` | `tests/unit/storage/test_retail_repositories.py`, `eval/final.jsonl` |
+| **Hybrid Policy RAG** | `src/rag/store.py`, `src/rag/subgraph.py` (Chroma + BM25 RRF) | `tests/unit/rag/test_store.py`, `tests/unit/rag/test_subgraph.py` |
+| **Strict Citation Grounding** | `src/rag/subgraph.py`, `src/workflow/agent_graph.py` (`respond`) | `tests/unit/workflow/test_agent_graph.py`, `artifacts/evaluation/` |
+| **Human-in-the-Loop Safety** | `src/workflow/agent_graph.py` (`confirm`), `src/services/chat.py` | `tests/unit/workflow/test_confirmation_flow.py` |
+| **Optimistic Concurrency Lock**| `src/storage/retail_repositories.py` (`OrderRepository.cancel`) | `tests/unit/storage/test_retail_repositories.py` |
+| **Reproducible Ingestion** | `scripts/ingest_corpus.py`, `src/rag/ingest.py` | `tests/unit/rag/test_ingest.py` |
+| **20-Case Functional Eval** | `scripts/run_evaluation.py`, `eval/final.jsonl` | `artifacts/evaluation/final-result.json` |
+| **100-Query Load Test** | `scripts/run_load.py`, `src/observability.py` | `artifacts/load/local-result.json` |
+| **Containerized Deployment** | `Dockerfile`, `compose.yaml` | Docker compose deployment verification |
 
 ---
 
-## Known Limitations
+## Known Prototype Boundaries
 
-- **Demo Identity**: The prototype operates with pre-selected demo customer `CUS-1001` in the Streamlit UI rather than enterprise OAuth/SAML authentication.
-- **Synthetic Retail Data**: SQLite database contains synthetic products, inventory, and orders rather than live ERP/warehouse connections.
-- **English-Only Corpus**: Knowledge base policies (`cancellation-policy.md`, `shipping-and-orders.md`, `warranty-and-support.md`) are in English.
-- **Local Inference Throughput**: Local LLM execution is bounded by single-machine GPU compute (~0.17 req/s with 20B reasoning model).
-- **No External Side Effects**: Order cancellations update the local SQLite database; no external carrier or payment gateway webhooks are invoked.
+- **In-Memory Thread Sessions**: Conversation checkpoints are managed via `MemorySaver`. Restarting the application clears active chat history; persistent orders remain in SQLite.
+- **Single-Tenant Demo Identity**: Customer context (`CUS-1001`) is selected in the Streamlit UI rather than via OAuth/SAML authentication.
+- **Local GPU Throughput**: Inference speed is bounded by single-GPU compute; concurrency limiter serializes model execution to protect local resources.
+- **Simulated Order Fulfillment**: Cancellations update the local relational database; external carrier logistics APIs are simulated.
