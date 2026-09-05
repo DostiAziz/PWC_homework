@@ -1,5 +1,5 @@
-from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from pwc_support.rag.subgraph import build_rag_graph, to_rag_result
+from retail_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from retail_support.rag.subgraph import build_rag_graph, to_rag_result
 
 
 class _Knowledge:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from pwc_support.storage.database import Database
+from retail_support.storage.database import Database
 from scripts.seed_retail_data import seed
 
 

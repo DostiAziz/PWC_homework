@@ -1,10 +1,10 @@
 from langgraph.types import Command
 
-from pwc_support.rag.answer import RagAnswerer
-from pwc_support.storage.database import Database
-from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
-from pwc_support.workflow.agent_graph import build_agent_graph
-from pwc_support.workflow.tools import ToolRegistry
+from retail_support.rag.answer import RagAnswerer
+from retail_support.storage.database import Database
+from retail_support.storage.retail_repositories import OrderRepository, ProductRepository
+from retail_support.workflow.agent_graph import build_agent_graph
+from retail_support.workflow.tools import ToolRegistry
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
 
 

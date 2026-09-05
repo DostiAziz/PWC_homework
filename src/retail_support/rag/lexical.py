@@ -4,7 +4,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from pwc_support.rag.ingest import CorpusChunk
+from retail_support.rag.ingest import CorpusChunk
 
 
 class LexicalIndex:

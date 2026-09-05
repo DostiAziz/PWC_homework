@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pwc_support.config import Settings
-from pwc_support.storage.database import Database
+from retail_support.config import Settings
+from retail_support.storage.database import Database
 
 
 def seed(database: Database) -> None:

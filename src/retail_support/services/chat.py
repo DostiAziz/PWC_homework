@@ -7,7 +7,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from pwc_support.domain.models import ChatReply
+from retail_support.domain.models import ChatReply
 
 logger = logging.getLogger(__name__)
 

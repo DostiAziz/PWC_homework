@@ -5,9 +5,9 @@ from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel
 
-from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from pwc_support.rag.ingest import CorpusChunk
-from pwc_support.rag.lexical import LexicalIndex
+from retail_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from retail_support.rag.ingest import CorpusChunk
+from retail_support.rag.lexical import LexicalIndex
 
 
 class Embedder(Protocol):
