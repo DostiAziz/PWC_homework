@@ -20,7 +20,7 @@ class RagAnswerer:
     def __init__(
         self,
         knowledge_base: KnowledgeBase,
-        generator: Generator,
+        generator: Generator | Any,
         *,
         minimum_similarity: float = 0.45,
         max_selected_hits: int = 4,

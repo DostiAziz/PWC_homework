@@ -6,6 +6,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
@@ -89,12 +90,17 @@ class ModelContextualizer:
         self.max_document_chars = max_document_chars
 
     def contextualize(self, *, document: CorpusDocument, heading: str, chunk: str) -> str:
+        system = "Write a short retrieval context using only the supplied retail document."
+        user = (
+            f"<document>{document.text[: self.max_document_chars]}</document>"
+            f"<heading>{heading}</heading><chunk>{chunk}</chunk>"
+        )
+        if hasattr(self.generator, "invoke"):
+            res = self.generator.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+            return (res.content if isinstance(res.content, str) else str(res.content)).strip()
         return self.generator.text(
-            system="Write a short retrieval context using only the supplied retail document.",
-            user=(
-                f"<document>{document.text[: self.max_document_chars]}</document>"
-                f"<heading>{heading}</heading><chunk>{chunk}</chunk>"
-            ),
+            system=system,
+            user=user,
             max_tokens=100,
             temperature=0.0,
         )

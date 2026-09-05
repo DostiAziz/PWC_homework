@@ -5,6 +5,7 @@ import time
 from html import escape
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from pwc_support.domain.models import (
@@ -28,9 +29,7 @@ class KnowledgeBase(Protocol):
 
 
 class Generator(Protocol):
-    def text(
-        self, *, system: str, user: str, max_tokens: int = 512, temperature: float = 0.0
-    ) -> str: ...
+    def invoke(self, messages: list[Any]) -> Any: ...
 
 
 class RagState(TypedDict, total=False):
@@ -146,16 +145,26 @@ def build_rag_graph(
             f"{citation.marker} {hit.title} — {hit.heading}: {hit.text}"
             for citation, hit in zip(citations, selected, strict=True)
         )
-        answer = generator.text(
-            system=ANSWER_SYSTEM_PROMPT,
-            user=(
-                f"<untrusted_question>\n{escape(state['request'].question, quote=False)}\n"
-                f"</untrusted_question>\n<retrieved_evidence>\n{escape(evidence, quote=False)}\n"
-                "</retrieved_evidence>"
-            ),
-            max_tokens=answer_tokens,
-            temperature=0.0,
+        user_prompt = (
+            f"<untrusted_question>\n{escape(state['request'].question, quote=False)}\n"
+            f"</untrusted_question>\n<retrieved_evidence>\n{escape(evidence, quote=False)}\n"
+            "</retrieved_evidence>"
         )
+        text_fn = getattr(generator, "text", None)
+        if hasattr(generator, "invoke"):
+            res = generator.invoke(
+                [SystemMessage(content=ANSWER_SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
+            )
+            answer = res.content if isinstance(res.content, str) else str(res.content)
+        elif text_fn is not None:
+            answer = text_fn(
+                system=ANSWER_SYSTEM_PROMPT,
+                user=user_prompt,
+                max_tokens=answer_tokens,
+                temperature=0.0,
+            )
+        else:
+            answer = ""
         answer = answer.translate(LOOKALIKE_BRACKETS)
         used_markers = set(MARKER.findall(answer))
         allowed_markers = {citation.marker for citation in citations}
