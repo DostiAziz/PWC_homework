@@ -4,8 +4,9 @@ import argparse
 from pathlib import Path
 
 from config import Settings
-from llm.embeddings import get_embeddings
+from llm.embeddings import embedding_dimension, get_embeddings, validate_collection_dimension
 from llm.ollama import get_chat_model
+from rag import ChromaKnowledgeBase, LexicalIndex, chroma_client
 from rag.ingest import (
     ChunkingConfig,
     MetadataContextualizer,
@@ -14,16 +15,20 @@ from rag.ingest import (
     load_manifest,
     prepare_chunks,
 )
-from rag import ChromaKnowledgeBase, LexicalIndex, chroma_client
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Synchronize the contextual Chroma corpus")
     parser.add_argument("--delete-source", help="Delete every chunk for one source ID")
     parser.add_argument(
-        "--metadata-context-only",
+        "--use-model-context",
         action="store_true",
-        help="Use deterministic source context instead of local LLM contextualization",
+        help="Use local LLM contextualization instead of deterministic source metadata",
+    )
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Explicitly permit empty corpus ingestion",
     )
     args = parser.parse_args()
     settings = Settings.from_env().with_retrieval_config(Path("config/retrieval.json"))
@@ -33,6 +38,8 @@ def main() -> None:
         model_name=settings.generation_model,
         base_url=settings.ollama_base_url,
         request_timeout_seconds=settings.request_timeout_seconds,
+        max_output_tokens=settings.answer_tokens,
+        max_parallel_generations=settings.max_parallel_generations,
     )
     store = ChromaKnowledgeBase(
         chroma_client(settings),
@@ -40,18 +47,26 @@ def main() -> None:
         embedder,
         LexicalIndex(settings.lexical_db),
     )
+    validate_collection_dimension(
+        store.collection,
+        embedding_dimension(embedder),
+        model_name=settings.embedding_model,
+    )
     if args.delete_source:
         deleted = store.delete_source(args.delete_source)
         print(f"Deleted {deleted} chunks for source {args.delete_source}")
         return
-    documents = load_documents(root, load_manifest(root / "manifest.json"))
+    manifest = load_manifest(root / "manifest.json")
+    if not manifest and not args.allow_empty:
+        raise ValueError("Corpus manifest is empty. Pass --allow-empty if intentional.")
+    documents = load_documents(root, manifest)
     contextualizer = (
-        MetadataContextualizer()
-        if args.metadata_context_only
-        else ModelContextualizer(
+        ModelContextualizer(
             generator,
             max_document_chars=settings.context_document_max_chars,
         )
+        if args.use_model_context
+        else MetadataContextualizer()
     )
     chunks = prepare_chunks(
         documents,
@@ -61,7 +76,11 @@ def main() -> None:
         ),
         contextualizer,
     )
-    report = store.sync(chunks, batch_size=settings.embedding_batch_size)
+    report = store.sync(
+        chunks,
+        batch_size=settings.embedding_batch_size,
+        full_reconciliation=True,
+    )
     print(
         f"Synchronized {len(documents)} sources and {len(chunks)} chunks: "
         f"upserted={report.upserted}, unchanged={report.unchanged}, "

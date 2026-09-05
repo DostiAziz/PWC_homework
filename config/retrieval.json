@@ -1,12 +1,9 @@
 {
-  "distance_space": "cosine",
   "top_k": 6,
   "minimum_similarity": 0.45,
   "max_selected_hits": 4,
   "max_evidence_chars": 6000,
   "chunk_size_tokens": 300,
   "chunk_overlap_tokens": 50,
-  "embedding_batch_size": 16,
-  "contextualization": "ollama",
-  "hard_filters": {"language": "en", "source_status": "active"}
+  "embedding_batch_size": 16
 }

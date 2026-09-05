@@ -75,6 +75,8 @@ def test_cancel_sets_status_cancelled_at_and_increments_version(retail_db: Datab
         order_id="ORD-4001",
         customer_id="CUS-1001",
         expected_version=1,
+        expected_total=Decimal("59.99"),
+        expected_currency="EUR",
         summary="Cancel ORD-4001",
     )
     repository.cancel(preview)
@@ -90,3 +92,81 @@ def test_cancel_sets_status_cancelled_at_and_increments_version(retail_db: Datab
 
     assert row["cancelled_at"] is not None
     assert action["n"] == 1
+
+
+def test_cancel_rejects_changed_total_without_version_increment(retail_db: Database) -> None:
+    repository = OrderRepository(retail_db)
+    preview = CancellationPreview(
+        confirmation_token="token-changed-total",
+        order_id="ORD-2001",
+        customer_id="CUS-1001",
+        expected_version=1,
+        expected_total=Decimal("99.99"),
+        expected_currency="EUR",
+        summary="Cancel ORD-2001",
+    )
+    with pytest.raises(CancellationConflict, match="order changed before cancellation"):
+        repository.cancel(preview)
+
+    with retail_db.connect() as c:
+        actions = c.execute(
+            "SELECT COUNT(*) n FROM cancellation_actions "
+            "WHERE confirmation_token='token-changed-total'"
+        ).fetchone()
+    assert actions["n"] == 0
+
+
+def test_cancel_rejects_shipped_or_delivered_orders(retail_db: Database) -> None:
+    repository = OrderRepository(retail_db)
+    # ORD-1001 is delivered
+    preview_delivered = CancellationPreview(
+        confirmation_token="token-delivered",
+        order_id="ORD-1001",
+        customer_id="CUS-1001",
+        expected_version=1,
+        expected_total=Decimal("129.99"),
+        expected_currency="EUR",
+        summary="Cancel ORD-1001",
+    )
+    with pytest.raises(CancellationConflict, match="order changed before cancellation"):
+        repository.cancel(preview_delivered)
+
+    # ORD-5001 is shipped
+    preview_shipped = CancellationPreview(
+        confirmation_token="token-shipped",
+        order_id="ORD-5001",
+        customer_id="CUS-1001",
+        expected_version=1,
+        expected_total=Decimal("49.99"),
+        expected_currency="EUR",
+        summary="Cancel ORD-5001",
+    )
+    with pytest.raises(CancellationConflict, match="order changed before cancellation"):
+        repository.cancel(preview_shipped)
+
+
+def test_cancel_rejects_customer_mismatch_on_token(retail_db: Database) -> None:
+    repository = OrderRepository(retail_db)
+    preview = CancellationPreview(
+        confirmation_token="token-legit",
+        order_id="ORD-2001",
+        customer_id="CUS-1001",
+        expected_version=1,
+        expected_total=Decimal("79.99"),
+        expected_currency="EUR",
+        summary="Cancel ORD-2001",
+    )
+    repository.cancel(preview)
+
+    forged = CancellationPreview(
+        confirmation_token="token-legit",
+        order_id="ORD-2001",
+        customer_id="CUS-9999",
+        expected_version=2,
+        expected_total=Decimal("79.99"),
+        expected_currency="EUR",
+        summary="Cancel ORD-2001",
+    )
+    with pytest.raises(CancellationConflict, match="token mismatch"):
+        repository.cancel(forged)
+

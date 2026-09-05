@@ -105,6 +105,8 @@ class ToolRegistry:
             order_id=order.order_id,
             customer_id=customer_id,
             expected_version=order.version,
+            expected_total=order.total,
+            expected_currency=order.currency,
             summary=f"Cancel order {order.order_id} for {order.total} {order.currency}",
         )
 

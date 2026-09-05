@@ -54,9 +54,43 @@ def test_submit_surfaces_confirmation_interrupt() -> None:
 
 def test_resume_projects_final_answer() -> None:
     graph = FakeGraph()
-    reply = AgentService(graph).resume(thread_id="t", decision="yes")
+    service = AgentService(graph)
+    service.submit(thread_id="t", body="cancel ORD-2001", customer_id="CUS-1001")
+    reply = service.resume(thread_id="t", customer_id="CUS-1001", decision="yes")
     assert "cancelled" in reply.message.lower()
     assert isinstance(graph.invocations[-1][0], Command)
+
+
+def test_thread_ownership_rejects_different_customer() -> None:
+    service = AgentService(FakeGraph())
+    reply1 = service.submit(thread_id="t", body="where is ORD-5001?", customer_id="CUS-1001")
+    assert reply1.status == "answered"
+
+    reply2 = service.submit(thread_id="t", body="hello", customer_id="CUS-9999")
+    assert reply2.status == "invalid_request"
+    assert "Access denied" in reply2.message
+
+
+def test_resume_rejects_different_or_unregistered_customer() -> None:
+    service = AgentService(FakeGraph())
+    service.submit(thread_id="t", body="cancel ORD-2001", customer_id="CUS-1001")
+
+    denied = service.resume(thread_id="t", customer_id="CUS-9999", decision="yes")
+    assert denied.status == "invalid_request"
+    assert "Access denied" in denied.message
+
+    expired = service.resume(thread_id="unknown-thread", customer_id="CUS-1001", decision="yes")
+    assert expired.status == "invalid_request"
+    assert "expired or is invalid" in expired.message
+
+
+def test_submit_while_awaiting_confirmation_rejects_with_notice() -> None:
+    service = AgentService(FakeGraph())
+    service.submit(thread_id="t", body="cancel ORD-2001", customer_id="CUS-1001")
+    collision = service.submit(thread_id="t", body="another question", customer_id="CUS-1001")
+    assert collision.awaiting_confirmation is True
+    assert collision.status == "awaiting_confirmation"
+    assert "already pending" in collision.message
 
 
 def test_submit_handles_graph_failure() -> None:
@@ -66,3 +100,5 @@ def test_submit_handles_graph_failure() -> None:
 
     reply = AgentService(Boom()).submit(thread_id="t", body="hi", customer_id="CUS-1001")
     assert reply.message == "The support agent is unavailable. Please try again."
+    assert reply.status == "unavailable"
+

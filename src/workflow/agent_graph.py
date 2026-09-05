@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from operator import add
 from typing import Annotated, Any, TypedDict
 
@@ -8,9 +9,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import interrupt
+from langgraph.types import Overwrite, interrupt
 
-from domain.models import Citation
+from domain.models import Citation, PendingCancellation
 from workflow.tools import TOOL_SCHEMAS, ToolRegistry
 
 SYSTEM_PROMPT = (
@@ -32,6 +33,8 @@ class AgentState(TypedDict, total=False):
     citations: tuple[Citation, ...]
     iterations: int
     response: str
+    pending_cancellations: list[PendingCancellation]
+    iteration_limit: bool
 
 
 def build_agent_graph(
@@ -45,7 +48,14 @@ def build_agent_graph(
             isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
             for m in state.get("messages", [])
         )
-        updates: dict[str, Any] = {"iterations": 0}
+        updates: dict[str, Any] = {
+            "iterations": 0,
+            "steps": Overwrite([]),
+            "citations": (),
+            "response": "",
+            "pending_cancellations": [],
+            "iteration_limit": False,
+        }
         if not has_system:
             updates["messages"] = [SystemMessage(content=SYSTEM_PROMPT)]
         return updates
@@ -84,8 +94,6 @@ def build_agent_graph(
         )
         if not raw_calls or state.get("iterations", 0) >= max_iterations:
             return "respond"
-        if any(c.get("name") == "cancel_order" for c in raw_calls):
-            return "confirm"
         return "tools"
 
     def tools(state: AgentState) -> dict[str, Any]:
@@ -98,43 +106,93 @@ def build_agent_graph(
         results: list[ToolMessage] = []
         steps: list[str] = []
         citations: tuple[Citation, ...] = state.get("citations", ())
+        pending_cancellations: list[PendingCancellation] = list(
+            state.get("pending_cancellations", [])
+        )
+        seen_cancellation_orders: set[str] = set()
+
         for call in raw_calls:
             name = call.get("name", "")
             args = call.get("args") or call.get("arguments") or {}
             call_id = call.get("id") or f"call_{name}"
-            outcome = registry.run(name, args, customer_id=state["customer_id"])
-            results.append(ToolMessage(content=outcome.content, name=name, tool_call_id=call_id))
-            steps.append(name)
-            if outcome.citations:
-                citations = outcome.citations
-        return {"messages": results, "steps": steps, "citations": citations}
+
+            if name == "cancel_order":
+                order_id = str(args.get("order_id", ""))
+                if order_id in seen_cancellation_orders:
+                    results.append(
+                        ToolMessage(
+                            content=(
+                                f"Duplicate cancellation request for order {order_id} "
+                                "in the same turn."
+                            ),
+                            name=name,
+                            tool_call_id=call_id,
+                        )
+                    )
+                    steps.append(name)
+                    continue
+                seen_cancellation_orders.add(order_id)
+                preview = registry.build_cancellation(order_id, state["customer_id"])
+                if isinstance(preview, str):
+                    results.append(
+                        ToolMessage(content=preview, name=name, tool_call_id=call_id)
+                    )
+                    steps.append(name)
+                else:
+                    pending_cancellations.append(
+                        PendingCancellation(tool_call_id=call_id, preview=preview)
+                    )
+            else:
+                outcome = registry.run(name, args, customer_id=state["customer_id"])
+                content = outcome.content
+                if outcome.citations:
+                    start_idx = len(citations)
+                    renumbered: list[Citation] = []
+                    for i, c in enumerate(outcome.citations, start=start_idx + 1):
+                        new_marker = f"[S{i}]"
+                        if c.marker != new_marker:
+                            content = content.replace(c.marker, new_marker)
+                        renumbered.append(c.model_copy(update={"marker": new_marker}))
+                    citations = citations + tuple(renumbered)
+                results.append(ToolMessage(content=content, name=name, tool_call_id=call_id))
+                steps.append(name)
+
+        return {
+            "messages": results,
+            "steps": steps,
+            "citations": citations,
+            "pending_cancellations": pending_cancellations,
+        }
+
+    def route_after_tools(state: AgentState) -> str:
+        if state.get("pending_cancellations"):
+            return "confirm"
+        return "agent"
 
     def confirm(state: AgentState) -> dict[str, Any]:
-        last = state["messages"][-1]
-        raw_calls = (
-            getattr(last, "tool_calls", None)
-            or (last.get("tool_calls") if isinstance(last, dict) else None)
-            or []
+        pending = list(state.get("pending_cancellations", []))
+        if not pending:
+            return {}
+        item = pending.pop(0)
+        preview = item.preview
+        call_id = item.tool_call_id
+
+        decision = interrupt({"order_id": preview.order_id, "summary": preview.summary})
+        content = (
+            registry.commit_cancellation(preview)
+            if str(decision).strip().lower() in {"yes", "y", "confirm"}
+            else f"Order {preview.order_id} was not cancelled."
         )
-        call = next(c for c in raw_calls if c.get("name") == "cancel_order")
-        args = call.get("args") or call.get("arguments") or {}
-        call_id = call.get("id") or "call_cancel_order"
-        preview = registry.build_cancellation(
-            str(args.get("order_id", "")), state["customer_id"]
-        )
-        if isinstance(preview, str):
-            content = preview
-        else:
-            decision = interrupt({"order_id": preview.order_id, "summary": preview.summary})
-            content = (
-                registry.commit_cancellation(preview)
-                if str(decision).strip().lower() in {"yes", "y", "confirm"}
-                else f"Order {preview.order_id} was not cancelled."
-            )
         return {
             "messages": [ToolMessage(content=content, name="cancel_order", tool_call_id=call_id)],
             "steps": ["cancel_order"],
+            "pending_cancellations": pending,
         }
+
+    def route_after_confirm(state: AgentState) -> str:
+        if state.get("pending_cancellations"):
+            return "confirm"
+        return "agent"
 
     def respond(state: AgentState) -> dict[str, Any]:
         msgs = state.get("messages", [])
@@ -143,6 +201,30 @@ def build_agent_graph(
             if isinstance(m, HumanMessage) or (isinstance(m, dict) and m.get("role") == "user"):
                 last_user_idx = i
         current_msgs = msgs[last_user_idx + 1 :] if last_user_idx >= 0 else msgs
+
+        # Check for unfulfilled tool calls if max iterations was hit
+        extra_messages: list[ToolMessage] = []
+        is_limit = state.get("iterations", 0) >= max_iterations
+        if current_msgs:
+            last_msg = current_msgs[-1]
+            raw_calls = getattr(last_msg, "tool_calls", None) or []
+            if raw_calls:
+                completed_ids = {
+                    getattr(m, "tool_call_id", None)
+                    for m in current_msgs
+                    if isinstance(m, ToolMessage)
+                }
+                for c in raw_calls:
+                    cid = c.get("id")
+                    if cid not in completed_ids:
+                        extra_messages.append(
+                            ToolMessage(
+                                content="Operation cancelled due to iteration limit.",
+                                name=c.get("name", "tool"),
+                                tool_call_id=cid,
+                            )
+                        )
+
         answers = [
             m.content
             for m in current_msgs
@@ -154,7 +236,30 @@ def build_agent_graph(
             if answers and answers[-1]
             else "I'm not sure how to help with that."
         )
-        return {"response": text, "citations": state.get("citations", ())}
+
+        # Validate citations against active citation set
+        available = state.get("citations", ())
+        used_markers = set(re.findall(r"\[S\d+\]", text))
+        valid_markers = {c.marker for c in available}
+        unknown_markers = used_markers - valid_markers
+
+        if unknown_markers:
+            text = (
+                "I cannot verify all policy citations in this response. "
+                "Please refer to our published policies."
+            )
+            filtered_citations: tuple[Citation, ...] = ()
+        else:
+            filtered_citations = tuple(c for c in available if c.marker in used_markers)
+
+        result: dict[str, Any] = {
+            "response": text,
+            "citations": filtered_citations,
+            "iteration_limit": is_limit,
+        }
+        if extra_messages:
+            result["messages"] = extra_messages
+        return result
 
     builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)
     for name, fn in [
@@ -168,7 +273,8 @@ def build_agent_graph(
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "agent")
     builder.add_conditional_edges("agent", route)
-    builder.add_edge("tools", "agent")
-    builder.add_edge("confirm", "agent")
+    builder.add_conditional_edges("tools", route_after_tools)
+    builder.add_conditional_edges("confirm", route_after_confirm)
     builder.add_edge("respond", END)
     return builder.compile(checkpointer=MemorySaver())
+

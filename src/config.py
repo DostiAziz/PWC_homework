@@ -3,12 +3,24 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal, cast
+from typing import ClassVar, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
 
 class Settings(BaseModel):
+    RETRIEVAL_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "top_k",
+            "minimum_similarity",
+            "max_selected_hits",
+            "max_evidence_chars",
+            "chunk_size_tokens",
+            "chunk_overlap_tokens",
+            "embedding_batch_size",
+            "context_document_max_chars",
+        }
+    )
     data_dir: Path = Path("data")
     artifacts_dir: Path = Path("artifacts")
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -18,9 +30,7 @@ class Settings(BaseModel):
     chroma_host: str = "127.0.0.1"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
     collection_name: str = "retail_support_v1_hf_384_cosine"
-    num_ctx: int = Field(default=8192, ge=2048, le=32768)
     answer_tokens: int = Field(default=512, ge=64, le=1024)
-    schema_tokens: int = Field(default=1024, ge=64, le=4096)
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     max_parallel_generations: int = Field(default=1, ge=1, le=2)
     embedding_batch_size: int = Field(default=16, ge=1, le=64)
@@ -50,15 +60,16 @@ class Settings(BaseModel):
         if not path.exists():
             return self
         payload = json.loads(path.read_text(encoding="utf-8"))
-        fields = set(type(self).model_fields)
-        return self.model_copy(
-            update={key: value for key, value in payload.items() if key in fields}
-        )
+        if not isinstance(payload, dict):
+            raise ValueError("Retrieval configuration must be a JSON object")
+        unknown = sorted(set(payload) - self.RETRIEVAL_FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown retrieval configuration fields: {', '.join(unknown)}")
+        merged = self.model_dump() | payload
+        return type(self).model_validate(merged)
 
     @model_validator(mode="after")
     def validate_constraints(self) -> Settings:
-        if self.max_parallel_generations > 1 and self.num_ctx > 8192:
-            raise ValueError("parallel generation above one requires num_ctx <= 8192")
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
             raise ValueError("chunk overlap must be smaller than chunk size")
         return self
@@ -87,8 +98,6 @@ class Settings(BaseModel):
             )
             or "sentence-transformers/all-MiniLM-L6-v2",
             answer_tokens=int(_get("ANSWER_TOKENS", "512") or "512"),
-            num_ctx=int(_get("NUM_CTX", "8192") or "8192"),
-            schema_tokens=int(_get("SCHEMA_TOKENS", "1024") or "1024"),
             request_timeout_seconds=float(_get("REQUEST_TIMEOUT_SECONDS", "120") or "120"),
             max_parallel_generations=int(_get("MAX_PARALLEL_GENERATIONS", "1") or "1"),
             retail_db_path=Path(retail_db_override) if retail_db_override else None,
