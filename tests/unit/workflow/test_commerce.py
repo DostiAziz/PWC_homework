@@ -111,6 +111,27 @@ def test_confirmed_cancellation_mutates_exactly_once(retail_db: Database) -> Non
     assert cancelled_order.status == "cancelled"
 
 
+def test_cancel_without_order_id_requests_it_and_flags_awaiting(retail_db: Database) -> None:
+    commerce = CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db))
+    task = Task(
+        task_id="task-1",
+        kind=TaskKind.ORDER,
+        request="I want to cancel my order",
+        order_action=OrderAction.CANCEL,
+    )
+
+    result = commerce.order(
+        task,
+        customer_id="CUS-1001",
+        pending_cancellation=None,
+        confirmed=None,
+    )
+
+    assert result.awaiting_cancel is True
+    assert result.pending_cancellation is None
+    assert "order ID" in result.message
+
+
 def test_shipped_order_cannot_enter_confirmation(retail_db: Database) -> None:
     commerce = CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db))
     task = Task(

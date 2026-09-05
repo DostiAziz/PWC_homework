@@ -248,3 +248,47 @@ def test_cancellation_requires_a_second_confirming_turn(retail_db: Database) -> 
     )
     assert confirmed["pending_cancellation"] is None
     assert confirmed["response"] == "Order ORD-2001 has been cancelled."
+
+
+def test_cancel_without_order_id_sets_awaiting_flag_through_graph(retail_db: Database) -> None:
+    planner = FakePlanner(
+        (
+            Task(
+                task_id="task-1",
+                kind=TaskKind.ORDER,
+                request="I want to cancel my order",
+                order_action=OrderAction.CANCEL,
+            ),
+        )
+    )
+    graph = build_graph(
+        planner=planner,
+        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
+        rag_answerer=FakeRag(),
+    )
+
+    result = graph.invoke({"message": "I want to cancel my order", "customer_id": "CUS-1001"})
+
+    assert result["awaiting_cancel"] is True
+    assert "order ID" in result["response"]
+    assert result["pending_cancellation"] is None
+
+
+def test_awaiting_cancel_resumes_with_bare_order_id_without_planner(retail_db: Database) -> None:
+    graph = build_graph(
+        planner=FailingPlanner(),
+        commerce=CommerceTools(ProductRepository(retail_db), OrderRepository(retail_db)),
+        rag_answerer=FakeRag(),
+    )
+
+    result = graph.invoke(
+        {"message": "ORD-2001", "customer_id": "CUS-1001", "awaiting_cancel": True}
+    )
+
+    assert result["pending_cancellation"] is not None
+    assert result["pending_cancellation"].order_id == "ORD-2001"
+    assert result["awaiting_cancel"] is False
+    assert "yes or no" in result["response"].casefold()
+    order = OrderRepository(retail_db).lookup("ORD-2001", "CUS-1001")
+    assert order is not None
+    assert order.status == "processing"

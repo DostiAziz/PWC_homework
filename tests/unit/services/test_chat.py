@@ -26,6 +26,25 @@ def test_submit_projects_terminal_graph_state_to_chat_reply() -> None:
     assert reply.total_duration_ms >= 0
 
 
+def test_submit_projects_awaiting_cancel_flag() -> None:
+    class AwaitingGraph:
+        def invoke(self, state: dict[str, Any]) -> dict[str, Any]:
+            return {
+                **state,
+                "tasks": (),
+                "response": "Please provide the order ID or order number, for example ORD-2001.",
+                "awaiting_cancel": True,
+            }
+
+    reply = ChatService(AwaitingGraph()).submit(
+        body="I want to cancel my order",
+        customer_id="CUS-1001",
+        awaiting_cancel=False,
+    )
+
+    assert reply.awaiting_cancel is True
+
+
 def test_submit_exposes_failure_without_inventing_an_answer() -> None:
     class FailingGraph:
         def invoke(self, _: dict[str, Any]) -> dict[str, Any]:

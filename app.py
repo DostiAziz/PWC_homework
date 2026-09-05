@@ -42,6 +42,7 @@ def initialise_session() -> None:
         "messages": [],
         "customer_id": "CUS-1001",
         "pending_cancellation": None,
+        "awaiting_cancel": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -82,8 +83,10 @@ if question := st.chat_input("Ask about products, offers, policies, or your orde
             body=question,
             customer_id=st.session_state.customer_id,
             pending_cancellation=st.session_state.pending_cancellation,
+            awaiting_cancel=st.session_state.awaiting_cancel,
         )
     st.session_state.pending_cancellation = reply.pending_cancellation
+    st.session_state.awaiting_cancel = reply.awaiting_cancel
     st.session_state.messages.append(
         {"role": "assistant", "content": reply.message, "reply": reply}
     )
