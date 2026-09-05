@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from langchain_core.tools import BaseTool, tool
+from langchain_core.utils.function_calling import convert_to_openai_tool
+
 from pwc_support.domain.models import CancellationPreview, Citation, RagRequest
 from pwc_support.rag.answer import RagAnswerer
 from pwc_support.storage.retail_repositories import (
@@ -14,72 +17,46 @@ from pwc_support.storage.retail_repositories import (
     ProductRepository,
 )
 
-TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_products",
-            "description": "Search the retail catalogue for products by name or category.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_offers",
-            "description": "List active discount offers, optionally filtered by product category.",
-            "parameters": {
-                "type": "object",
-                "properties": {"category": {"type": "string"}},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_order_status",
-            "description": "Get the status of the current customer's order by order id.",
-            "parameters": {
-                "type": "object",
-                "properties": {"order_id": {"type": "string"}},
-                "required": ["order_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_policies",
-            "description": (
-                "Answer a shipping, warranty, or cancellation policy question from the docs."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"question": {"type": "string"}},
-                "required": ["question"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cancel_order",
-            "description": (
-                "Start cancelling the current customer's order. Requires user confirmation."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"order_id": {"type": "string"}},
-                "required": ["order_id"],
-            },
-        },
-    },
+
+@tool
+def search_products(query: str) -> str:
+    """Search the retail catalogue for products by name or category."""
+    return ""
+
+
+@tool
+def list_offers(category: str | None = None) -> str:
+    """List active discount offers, optionally filtered by product category."""
+    return ""
+
+
+@tool
+def get_order_status(order_id: str) -> str:
+    """Get the status of the current customer's order by order id."""
+    return ""
+
+
+@tool
+def search_policies(question: str) -> str:
+    """Answer a shipping, warranty, or cancellation policy question from the docs."""
+    return ""
+
+
+@tool
+def cancel_order(order_id: str) -> str:
+    """Start cancelling the current customer's order. Requires user confirmation."""
+    return ""
+
+
+ALL_TOOLS: list[BaseTool] = [
+    search_products,
+    list_offers,
+    get_order_status,
+    search_policies,
+    cancel_order,
 ]
+
+TOOL_SCHEMAS: list[dict[str, Any]] = [convert_to_openai_tool(t) for t in ALL_TOOLS]
 
 
 @dataclass
@@ -91,6 +68,8 @@ class ToolOutcome:
 
 
 class ToolRegistry:
+    tools: list[BaseTool] = ALL_TOOLS
+
     def __init__(
         self,
         products: ProductRepository,

@@ -15,10 +15,12 @@ from pwc_support.workflow.tools import TOOL_SCHEMAS, ToolRegistry
 
 SYSTEM_PROMPT = (
     "You are a retail customer support agent. Use the tools to answer questions about "
-    "products, offers, orders, and policies. Only answer policy questions from the "
+    "products, offers, orders, and policies. When answering from tool results, include the "
+    "relevant details such as prices and order numbers. Only answer policy questions from the "
     "search_policies tool result, keeping its [S1] citation markers verbatim; never state "
-    "policy from your own knowledge. To cancel an order, call cancel_order; the system will "
-    "ask the customer to confirm. Be concise."
+    "policy from your own knowledge. If an order is not found, state that you could not find "
+    "the order. To cancel an order, call cancel_order; the system will ask the customer to "
+    "confirm. Be concise."
 )
 
 
@@ -38,7 +40,8 @@ class AgentState(TypedDict, total=False):
 def build_agent_graph(
     *, model: Any, registry: ToolRegistry, max_iterations: int = 6
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
-    bound_model = model.bind_tools(TOOL_SCHEMAS) if hasattr(model, "bind_tools") else model
+    tool_defs = getattr(registry, "tools", None) or TOOL_SCHEMAS
+    bound_model = model.bind_tools(tool_defs) if hasattr(model, "bind_tools") else model
 
     def intake(state: AgentState) -> dict[str, Any]:
         has_system = any(
@@ -68,7 +71,7 @@ def build_agent_graph(
         if hasattr(bound_model, "invoke"):
             message = bound_model.invoke(ordered)
         elif hasattr(bound_model, "chat_with_tools"):
-            raw = bound_model.chat_with_tools(messages=ordered, tools=TOOL_SCHEMAS)
+            raw = bound_model.chat_with_tools(messages=ordered, tools=tool_defs)
             if isinstance(raw, dict):
                 calls = [
                     {
