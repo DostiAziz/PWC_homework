@@ -20,7 +20,7 @@ class ProductSummary(DomainModel):
     product_id: str
     name: str
     category: str
-    price: Decimal = Field(ge=0)
+    price: Decimal = Field(ge=Decimal("0"))
     currency: str
     stock: int = Field(ge=0)
 
@@ -30,9 +30,9 @@ class OfferSummary(DomainModel):
     product_id: str
     name: str
     description: str
-    list_price: Decimal = Field(ge=0)
-    discount_percent: Decimal = Field(ge=0, le=100)
-    effective_price: Decimal = Field(ge=0)
+    list_price: Decimal = Field(ge=Decimal("0"))
+    discount_percent: Decimal = Field(ge=Decimal("0"), le=Decimal("100"))
+    effective_price: Decimal = Field(ge=Decimal("0"))
     currency: str
 
 
@@ -51,7 +51,7 @@ class CancellationPreview(DomainModel):
     order_id: str
     customer_id: str
     expected_version: int = Field(ge=1)
-    expected_total: Decimal = Field(default=Decimal("79.99"), ge=0)
+    expected_total: Decimal = Field(default=Decimal("79.99"), ge=Decimal("0"))
     expected_currency: str = Field(default="EUR")
     summary: str
 

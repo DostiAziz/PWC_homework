@@ -30,6 +30,12 @@ def main() -> None:
         action="store_true",
         help="Explicitly permit empty corpus ingestion",
     )
+    parser.add_argument(
+        "--full-reconciliation",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reconcile and remove deleted sources from vector and lexical indexes",
+    )
     args = parser.parse_args()
     settings = Settings.from_env().with_retrieval_config(Path("config/retrieval.json"))
     root = Path(__file__).parents[1] / "corpus"
@@ -79,7 +85,7 @@ def main() -> None:
     report = store.sync(
         chunks,
         batch_size=settings.embedding_batch_size,
-        full_reconciliation=True,
+        full_reconciliation=args.full_reconciliation,
     )
     print(
         f"Synchronized {len(documents)} sources and {len(chunks)} chunks: "

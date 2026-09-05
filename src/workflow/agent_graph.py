@@ -21,6 +21,8 @@ SYSTEM_PROMPT = (
     "search_policies tool result, keeping its [S1] citation markers verbatim; never state "
     "policy from your own knowledge. If an order is not found, state that you could not find "
     "the order. When an order is cancelled, state that the order has been cancelled. "
+    "If an order is not cancelled or cancellation is declined, state that the order "
+    "was not cancelled. "
     "To cancel an order, call cancel_order; the system will ask the customer to confirm. "
     "Be concise."
 )

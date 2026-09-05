@@ -1,7 +1,7 @@
 {
   "top_k": 6,
-  "minimum_similarity": 0.45,
-  "max_selected_hits": 4,
+  "minimum_similarity": 0.30,
+  "max_selected_hits": 6,
   "max_evidence_chars": 6000,
   "chunk_size_tokens": 300,
   "chunk_overlap_tokens": 50,

@@ -1,64 +1,100 @@
 {
   "generation_model": "gpt-oss:20b",
-  "embedding_model": "nomic-embed-text",
-  "total_requests": 8,
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "total_requests": 100,
   "phases": [
     {
-      "requests": 4,
+      "requests": 50,
       "concurrency": 1,
-      "elapsed_seconds": 9.25,
-      "throughput_per_second": 0.432,
+      "elapsed_seconds": 234.48,
+      "throughput_per_second": 0.213,
       "failures": 0,
       "latency_ms": {
-        "min": 912.04,
-        "mean": 2312.67,
-        "p50": 2027.6,
-        "p95": 3712.37,
-        "p99": 3712.37,
-        "max": 3712.37
+        "min": 879.86,
+        "mean": 4689.55,
+        "p50": 2530.24,
+        "p95": 11240.55,
+        "p99": 12152.74,
+        "max": 12152.74
       },
       "node_profile": {
-        "agent": {
-          "calls": 4,
-          "mean_ms": 2312.58,
-          "total_ms": 9250.31,
-          "share_of_measured_ms": 1.0
+        "generation.invoke": {
+          "calls": 50,
+          "mean_ms": 1945.63,
+          "total_ms": 97281.72,
+          "share_of_measured_ms": 0.9728
+        },
+        "retrieval": {
+          "calls": 20,
+          "mean_ms": 107.85,
+          "total_ms": 2157.0,
+          "share_of_measured_ms": 0.0216
+        },
+        "agent.submit": {
+          "calls": 50,
+          "mean_ms": 11.28,
+          "total_ms": 564.13,
+          "share_of_measured_ms": 0.0056
+        },
+        "generation.queue": {
+          "calls": 50,
+          "mean_ms": 0.0,
+          "total_ms": 0.01,
+          "share_of_measured_ms": 0.0
         }
       },
       "errors": []
     },
     {
-      "requests": 4,
+      "requests": 50,
       "concurrency": 2,
-      "elapsed_seconds": 8.99,
-      "throughput_per_second": 0.445,
+      "elapsed_seconds": 229.22,
+      "throughput_per_second": 0.218,
       "failures": 0,
       "latency_ms": {
-        "min": 1657.68,
-        "mean": 4112.85,
-        "p50": 2879.43,
-        "p95": 6106.52,
-        "p99": 6106.52,
-        "max": 6106.52
+        "min": 889.87,
+        "mean": 9096.94,
+        "p50": 5669.03,
+        "p95": 19537.71,
+        "p99": 20435.16,
+        "max": 20435.16
       },
       "node_profile": {
-        "agent": {
-          "calls": 4,
-          "mean_ms": 4112.54,
-          "total_ms": 16450.16,
-          "share_of_measured_ms": 1.0
+        "generation.queue": {
+          "calls": 50,
+          "mean_ms": 2224.55,
+          "total_ms": 111227.37,
+          "share_of_measured_ms": 0.5271
+        },
+        "generation.invoke": {
+          "calls": 50,
+          "mean_ms": 1908.33,
+          "total_ms": 95416.59,
+          "share_of_measured_ms": 0.4521
+        },
+        "retrieval": {
+          "calls": 20,
+          "mean_ms": 174.35,
+          "total_ms": 3487.02,
+          "share_of_measured_ms": 0.0165
+        },
+        "agent.submit": {
+          "calls": 50,
+          "mean_ms": 18.05,
+          "total_ms": 902.36,
+          "share_of_measured_ms": 0.0043
         }
       },
       "errors": []
     }
   ],
   "summary": {
-    "bottleneck_node": "agent",
-    "bottleneck_share_of_measured_time": 1.0,
-    "p95_growth_at_higher_concurrency": 1.64,
-    "throughput_gain_at_higher_concurrency": 1.03,
+    "bottleneck_node": "generation.invoke",
+    "bottleneck_share_of_measured_time": 0.9728,
+    "p95_growth_at_higher_concurrency": 1.74,
+    "throughput_gain_at_higher_concurrency": 1.02,
     "recommendations": [
-      "Benchmark a smaller generation model against the frozen evaluation before adoption; the measured hot node is agent.",
+      "Benchmark a smaller generation model against the frozen evaluation before adoption; the measured hot node is generation.invoke.",
       "Keep one generation slot when added concurrency raises p95 much more than throughput; otherwise re-run with the measured best concurrency."
     ]
   }

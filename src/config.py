@@ -38,8 +38,8 @@ class Settings(BaseModel):
     chunk_overlap_tokens: int = Field(default=50, ge=0, le=500)
     context_document_max_chars: int = Field(default=24000, ge=2000, le=100000)
     top_k: int = Field(default=6, ge=1, le=20)
-    minimum_similarity: float = Field(default=0.45, ge=0.0, le=1.0)
-    max_selected_hits: int = Field(default=4, ge=1, le=10)
+    minimum_similarity: float = Field(default=0.30, ge=0.0, le=1.0)
+    max_selected_hits: int = Field(default=6, ge=1, le=10)
     max_evidence_chars: int = Field(default=6000, ge=500, le=40000)
     retail_db_path: Path | None = None
 
