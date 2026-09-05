@@ -1,5 +1,5 @@
 """Application services exposed to UI and channel adapters."""
 
-from pwc_support.services.chat import ChatService
+from pwc_support.services.chat import AgentService
 
-__all__ = ["ChatService"]
+__all__ = ["AgentService"]

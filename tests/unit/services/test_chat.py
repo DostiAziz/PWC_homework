@@ -1,57 +1,66 @@
 from typing import Any
 
-from pwc_support.domain.models import Task, TaskKind, TraceEvent
-from pwc_support.services.chat import ChatService
+from langgraph.types import Command
+from pwc_support.services.chat import AgentService
 
 
 class FakeGraph:
-    def invoke(self, state: dict[str, Any]) -> dict[str, Any]:
+    def __init__(self) -> None:
+        self.invocations: list[Any] = []
+
+    def invoke(self, payload, config=None):
+        self.invocations.append((payload, config))
+        if isinstance(payload, Command):
+            return {
+                "response": "Order ORD-2001 has been cancelled.",
+                "citations": (),
+                "steps": ["cancel_order"],
+            }
+        text = payload["messages"][-1]["content"]
+        if "cancel" in text:
+
+            class _I:  # mimic Interrupt object
+                value = {
+                    "order_id": "ORD-2001",
+                    "summary": "Cancel order ORD-2001 for 79.99 EUR",
+                }
+
+            return {"__interrupt__": [_I()]}
         return {
-            **state,
-            "tasks": (Task(task_id="task-1", kind=TaskKind.KNOWLEDGE, request=state["message"]),),
-            "response": "Grounded answer. [S1]",
+            "response": "Order ORD-5001 is shipped.",
             "citations": (),
-            "events": (TraceEvent(node="respond", event_type="completed", duration_ms=1.0),),
+            "steps": ["get_order_status"],
         }
 
 
-def test_submit_projects_terminal_graph_state_to_chat_reply() -> None:
-    reply = ChatService(FakeGraph()).submit(
-        body="How long is shipping?",
-        customer_id="CUS-1001",
+def test_submit_projects_answer() -> None:
+    reply = AgentService(FakeGraph()).submit(
+        thread_id="t", body="where is ORD-5001?", customer_id="CUS-1001"
     )
+    assert reply.message == "Order ORD-5001 is shipped."
+    assert reply.awaiting_confirmation is False
+    assert reply.steps == ("get_order_status",)
 
-    assert reply.message == "Grounded answer. [S1]"
-    assert [task.kind for task in reply.tasks] == [TaskKind.KNOWLEDGE]
-    assert reply.total_duration_ms >= 0
 
-
-def test_submit_projects_awaiting_cancel_flag() -> None:
-    class AwaitingGraph:
-        def invoke(self, state: dict[str, Any]) -> dict[str, Any]:
-            return {
-                **state,
-                "tasks": (),
-                "response": "Please provide the order ID or order number, for example ORD-2001.",
-                "awaiting_cancel": True,
-            }
-
-    reply = ChatService(AwaitingGraph()).submit(
-        body="I want to cancel my order",
-        customer_id="CUS-1001",
-        awaiting_cancel=False,
+def test_submit_surfaces_confirmation_interrupt() -> None:
+    reply = AgentService(FakeGraph()).submit(
+        thread_id="t", body="cancel ORD-2001", customer_id="CUS-1001"
     )
+    assert reply.awaiting_confirmation is True
+    assert "Cancel order ORD-2001" in reply.preview
 
-    assert reply.awaiting_cancel is True
+
+def test_resume_projects_final_answer() -> None:
+    graph = FakeGraph()
+    reply = AgentService(graph).resume(thread_id="t", decision="yes")
+    assert "cancelled" in reply.message.lower()
+    assert isinstance(graph.invocations[-1][0], Command)
 
 
-def test_submit_exposes_failure_without_inventing_an_answer() -> None:
-    class FailingGraph:
-        def invoke(self, _: dict[str, Any]) -> dict[str, Any]:
+def test_submit_handles_graph_failure() -> None:
+    class Boom:
+        def invoke(self, *_a, **_k):
             raise RuntimeError("offline")
 
-    reply = ChatService(FailingGraph()).submit(body="question", customer_id="CUS-1001")
-
-    assert reply.message == "The support workflow is unavailable. Please try again."
-    assert reply.citations == ()
-    assert reply.pending_cancellation is None
+    reply = AgentService(Boom()).submit(thread_id="t", body="hi", customer_id="CUS-1001")
+    assert reply.message == "The support agent is unavailable. Please try again."
