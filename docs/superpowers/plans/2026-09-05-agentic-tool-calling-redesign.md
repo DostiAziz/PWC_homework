@@ -1,6 +1,6 @@
 # Agentic Tool-Calling Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the deterministic planner + graph router with a single tool-calling agent (one LLM "brain") built as an explicit custom LangGraph, so the LLM decides every action while still satisfying the brief's ≥5-node + RAG-subgraph structure.
 
@@ -27,7 +27,7 @@
 
 The earlier uncommitted worktree edits (planner offers/compound + `awaiting_cancel`) have been **committed and merged into main** (`27f6f56`). The redesign deletes `planner.py`, `graph.py`, and `commerce.py` entirely (Task 7) and fully rewrites `chat.py` (Task 5) and `app.py` (Task 6), so those merged changes do not conflict.
 
-- [ ] **Step 1: Verify working tree is clean**
+- [x] **Step 1: Verify working tree is clean**
 
 ```bash
 git status   # working tree clean except possibly this plan file
@@ -47,7 +47,7 @@ Expected: clean working tree on `main` at commit `27f6f56` or later.
 - Consumes: existing `OllamaGateway.__init__(client, generation_model=..., ...)`.
 - Produces: `OllamaGateway.chat_with_tools(messages: list[dict], tools: list[dict], *, max_tokens: int = 512, temperature: float = 0.0) -> dict` returning the assistant message dict `{"role": "assistant", "content": str, "tool_calls": list[dict]}` (tool_calls normalized to `[{"name": str, "arguments": dict}]`, empty list when none).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/unit/llm/test_ollama.py (append)
@@ -84,12 +84,12 @@ def test_chat_with_tools_returns_empty_tool_calls_for_plain_answer() -> None:
     assert msg["tool_calls"] == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/llm/test_ollama.py -q`
 Expected: FAIL — `AttributeError: 'OllamaGateway' object has no attribute 'chat_with_tools'`.
 
-- [ ] **Step 3: Implement `chat_with_tools`**
+- [x] **Step 3: Implement `chat_with_tools`**
 
 ```python
 # src/pwc_support/llm/ollama.py  (add method to OllamaGateway)
@@ -121,12 +121,12 @@ def chat_with_tools(
     return {"role": "assistant", "content": message.get("content") or "", "tool_calls": tool_calls}
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/llm/test_ollama.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pwc_support/llm/ollama.py tests/unit/llm/test_ollama.py
@@ -150,7 +150,7 @@ git commit -m "feat: add native tool-calling to Ollama gateway"
 
 Note: `run("cancel_order", ...)` returns `ToolOutcome(content="", requires_confirmation=True, order_id=...)` WITHOUT touching the DB — the `confirm` node (Task 4) performs the preview/commit. All other tools return their content directly.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/workflow/test_tools.py
@@ -204,12 +204,12 @@ def test_unknown_tool_returns_safe_message(retail_db: Database) -> None:
     assert "unknown" in out.content.lower()
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_tools.py -q`
 Expected: FAIL — `ModuleNotFoundError: pwc_support.workflow.tools`.
 
-- [ ] **Step 3: Implement `tools.py`**
+- [x] **Step 3: Implement `tools.py`**
 
 ```python
 # src/pwc_support/workflow/tools.py
@@ -308,12 +308,12 @@ class ToolRegistry:
                            order_id=str(args.get("order_id", "")))
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_tools.py -q`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pwc_support/workflow/tools.py tests/unit/workflow/test_tools.py
@@ -334,7 +334,7 @@ git commit -m "feat: add agent tool registry over existing repositories"
   - `commit_cancellation(self, preview: CancellationPreview) -> str` — runs the atomic cancel, returns the confirmation message; on `CancellationConflict` returns a safe message.
 - Consumes: `OrderRepository.lookup`, `OrderRepository.cancel`, `CancellationConflict`, a `token_factory` (default `uuid4`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/workflow/test_tools.py (append)
@@ -371,12 +371,12 @@ def test_commit_cancellation_mutates_once(retail_db: Database) -> None:
     assert order is not None and order.status == "cancelled" and order.version == 2
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_tools.py -q`
 Expected: FAIL — `AttributeError: 'ToolRegistry' object has no attribute 'build_cancellation'`.
 
-- [ ] **Step 3: Implement the helpers**
+- [x] **Step 3: Implement the helpers**
 
 ```python
 # src/pwc_support/workflow/tools.py — extend imports and ToolRegistry
@@ -415,12 +415,12 @@ def commit_cancellation(self, preview: CancellationPreview) -> str:
     return f"Order {result.order_id} has been cancelled."
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_tools.py -q`
 Expected: PASS (10 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pwc_support/workflow/tools.py tests/unit/workflow/test_tools.py
@@ -443,7 +443,7 @@ git commit -m "feat: add cancellation preview and commit helpers to tool registr
   - `build_agent_graph(*, model, registry: ToolRegistry, max_iterations: int = 6) -> CompiledStateGraph` compiled with `MemorySaver()`.
 - Behaviour: `intake` seeds a system message once + appends nothing else; `agent` calls the model; conditional edge routes to `confirm` when a `cancel_order` call is present, to `tools` for other tool calls, else to `respond`; `confirm` runs `interrupt({...})` and commits/rejects; `respond` sets `response` from the last assistant content and passes citations through.
 
-- [ ] **Step 1: Write the failing tests** (use a scripted fake model; no Ollama)
+- [x] **Step 1: Write the failing tests** (use a scripted fake model; no Ollama)
 
 ```python
 # tests/unit/workflow/test_agent_graph.py
@@ -557,12 +557,12 @@ def test_max_iterations_guard_stops_loop(retail_db: Database) -> None:
     assert len(model.calls) <= 4
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_agent_graph.py -q`
 Expected: FAIL — `ModuleNotFoundError: pwc_support.workflow.agent_graph`.
 
-- [ ] **Step 3: Implement `agent_graph.py`**
+- [x] **Step 3: Implement `agent_graph.py`**
 
 ```python
 # src/pwc_support/workflow/agent_graph.py
@@ -669,12 +669,12 @@ def build_agent_graph(
     return builder.compile(checkpointer=MemorySaver())
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/workflow/test_agent_graph.py -q`
 Expected: PASS (6 tests). If the `confirm` re-run on resume double-builds a preview, that is expected and harmless (version check guards the commit).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pwc_support/workflow/agent_graph.py tests/unit/workflow/test_agent_graph.py
@@ -697,7 +697,7 @@ git commit -m "feat: build custom tool-calling agent graph with confirm interrup
   - A helper `_project(terminal_or_interrupt) -> ChatReply` handling both the interrupted state (`__interrupt__` present → `awaiting_confirmation=True`, `preview=<summary>`) and the terminal state.
 - Consumes: `graph.invoke(input, config)` and `graph.invoke(Command(resume=...), config)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/unit/services/test_chat.py  (replace file contents)
@@ -751,12 +751,12 @@ def test_submit_handles_graph_failure() -> None:
     assert reply.message == "The support agent is unavailable. Please try again."
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/services/test_chat.py -q`
 Expected: FAIL — `ImportError: cannot import name 'AgentService'`.
 
-- [ ] **Step 3: Extend `ChatReply` and implement `AgentService`**
+- [x] **Step 3: Extend `ChatReply` and implement `AgentService`**
 
 ```python
 # src/pwc_support/domain/models.py — ChatReply
@@ -830,12 +830,12 @@ class AgentService:
         return round((time.perf_counter() - started) * 1000, 2)
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/unit/services/test_chat.py -q`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Update `services/__init__.py`**
+- [x] **Step 5: Update `services/__init__.py`**
 
 ```python
 # src/pwc_support/services/__init__.py
@@ -846,7 +846,7 @@ from pwc_support.services.chat import AgentService
 __all__ = ["AgentService"]
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/pwc_support/domain/models.py src/pwc_support/services/chat.py \
@@ -867,7 +867,7 @@ git commit -m "feat: add AgentService with submit/resume over the agent graph"
 - Consumes: `build_agent_graph`, `ToolRegistry`, `AgentService`.
 - Produces: `Runtime` with `service: AgentService`, `settings`, `knowledge_base`. `build_runtime()` builds the registry + agent graph.
 
-- [ ] **Step 1: Update `bootstrap.py`** — replace imports, `Runtime` type, and graph/service construction
+- [x] **Step 1: Update `bootstrap.py`** — replace imports, `Runtime` type, and graph/service construction
 
 ```python
 # src/pwc_support/bootstrap.py — full rewrite of imports and wiring
@@ -896,7 +896,7 @@ return Runtime(settings=resolved, service=AgentService(graph), database=database
                knowledge_base=knowledge_base)
 ```
 
-- [ ] **Step 2: Update `app.py`** — thread id, resume routing, steps trace, render_trace rewrite
+- [x] **Step 2: Update `app.py`** — thread id, resume routing, steps trace, render_trace rewrite
 
 ```python
 # app.py — add uuid import at the top
@@ -931,7 +931,7 @@ if question := st.chat_input("Ask about products, offers, policies, or your orde
     st.rerun()
 ```
 
-- [ ] **Step 3: Replace the UI contract test**
+- [x] **Step 3: Replace the UI contract test**
 
 ```python
 # tests/ui/test_retail_contracts.py (full rewrite)
@@ -956,14 +956,14 @@ def test_ui_routes_confirmation_via_resume() -> None:
     assert "thread_id" in source
 ```
 
-- [ ] **Step 4: Manual smoke + run suite**
+- [x] **Step 4: Manual smoke + run suite**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:cacheprovider
 ```
 Expected: PASS. Then a manual Streamlit smoke (seed + ingest + run) per the Global Constraints commands.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pwc_support/bootstrap.py app.py tests/ui/test_retail_contracts.py
@@ -979,16 +979,16 @@ git commit -m "feat: wire agent service into runtime and Streamlit UI"
 - Delete: `tests/unit/workflow/test_planner.py`, `tests/unit/workflow/test_graph.py`, `tests/unit/workflow/test_commerce.py`
 - Modify: `src/pwc_support/domain/state.py` (remove `SupportState` if unused), any lingering imports
 
-- [ ] **Step 1: Grep for references**
+- [x] **Step 1: Grep for references**
 
 ```bash
 rg -n "planner|SupportState|build_graph|CommerceTools|plan_tasks" src app.py scripts tests
 ```
 Resolve every hit: repositories/RagAnswerer stay; planner/graph/commerce references go.
 
-- [ ] **Step 2: Delete files and dead tests; fix imports**
+- [x] **Step 2: Delete files and dead tests; fix imports**
 
-- [ ] **Step 3: Remove deprecated `ChatReply` fields**
+- [x] **Step 3: Remove deprecated `ChatReply` fields**
 
 Now that `app.py`, the eval script, and all tests use the new fields (`steps`, `awaiting_confirmation`, `preview`), remove the deprecated fields from `ChatReply` in `src/pwc_support/domain/models.py`:
 
@@ -1005,7 +1005,7 @@ class ChatReply(DomainModel):
 
 Also remove the now-unused imports: `Task`, `TraceEvent`, `CancellationPreview` (if no other model uses them — `CancellationPreview` is still used by `retail_repositories.py`, so keep it; only drop `Task` and `TraceEvent` from `ChatReply`'s perspective).
 
-- [ ] **Step 4: Run full suite + gates**
+- [x] **Step 4: Run full suite + gates**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:cacheprovider
@@ -1014,7 +1014,7 @@ PYTHONPATH=src .venv/bin/python -m pytest -q -p no:cacheprovider
 ```
 Expected: all green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A
@@ -1033,7 +1033,7 @@ git commit -m "refactor: remove planner and deterministic router"
 **Interfaces:**
 - The runner now drives `AgentService.submit(...)` with a fresh `thread_id` per case (and a follow-up `resume("yes")` for cancel-confirm cases), then scores: `routing` = expected tool appears in `reply.steps`; `sources`/`attribution` = citations present when required; `safety` = cancellation gated (first turn `awaiting_confirmation` for cancel cases) and no cross-customer leak; `terms` = required substrings present.
 
-- [ ] **Step 1: Update the eval runner and scorer**
+- [x] **Step 1: Update the eval runner and scorer**
 
 Key changes to `scripts/run_evaluation.py`:
 
@@ -1079,7 +1079,7 @@ def score_case(case: dict[str, Any], reply: ChatReply) -> CaseScore:
 
 Update `eval/final.jsonl` cases: replace `"expected_task_kinds"` with `"expected_tools"` (e.g. `["get_order_status"]`, `["search_policies"]`, `["cancel_order"]`), replace `"expect_pending_cancellation"` with `"expect_confirmation"`, and add multi-turn cancellation cases as `"turns": ["cancel ORD-2001", "yes"]`.
 
-- [ ] **Step 2: Write a unit test for the new scorer**
+- [x] **Step 2: Write a unit test for the new scorer**
 
 ```python
 # tests/unit/scripts/test_evaluation.py — verify new scoring on a 2-case subset
@@ -1106,8 +1106,8 @@ def test_cancel_safety_requires_confirmation_gate() -> None:
     assert score.checks["safety"] is True
 ```
 
-- [ ] **Step 3: Run `pytest tests/unit/scripts/test_evaluation.py`; then the live eval** per Global Constraints and confirm ≥ 90% with safety 100%.
-- [ ] **Step 4: Commit**
+- [x] **Step 3: Run `pytest tests/unit/scripts/test_evaluation.py`; then the live eval** per Global Constraints and confirm ≥ 90% with safety 100%.
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/run_evaluation.py tests/unit/scripts/test_evaluation.py eval/final.jsonl
@@ -1121,9 +1121,9 @@ git commit -m "test: evaluate agent by tool-intent and grounding"
 **Files:**
 - Modify: `README.md` (architecture section, node list, agent/tool description, eval + load results, run instructions)
 
-- [ ] **Step 1: Rewrite the Architecture section** to describe the 5-node agent graph + RAG subgraph + the five tools + confirm interrupt + in-memory checkpointer.
-- [ ] **Step 2: Refresh evaluation and load numbers** from the re-run artifacts.
-- [ ] **Step 3: Commit**
+- [x] **Step 1: Rewrite the Architecture section** to describe the 5-node agent graph + RAG subgraph + the five tools + confirm interrupt + in-memory checkpointer.
+- [x] **Step 2: Refresh evaluation and load numbers** from the re-run artifacts.
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
