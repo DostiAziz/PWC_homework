@@ -22,35 +22,38 @@ Everything runs locally: local Ollama inference, local Chroma vector store, loca
 
 ## Architecture
 
-The system is organized as a single 7-node LangGraph main graph with a dedicated 4-node RAG subgraph:
+The system is organized as a 5-node LangGraph tool-calling agent with a nested 4-node RAG subgraph, managed by an in-memory `MemorySaver` checkpointer:
 
 ```text
-Streamlit chat -> ChatService
-                    |
-START -> intake -> plan_tasks
-                    |-- knowledge -> rag_task -> [prepare -> retrieve -> select -> answer]
-                    |-- catalogue -> catalogue_task -> SQLite
-                    `-- order -> order_task -> SQLite
-                                  |
-                         join_results -> respond -> END
+Streamlit chat -> AgentService (thread_id)
+                     |
+START -> intake -> agent <-------------------.
+                     |                        |
+                     |-- tool_calls (non-cancel) -> tools ->'
+                     |-- cancel_order ----------> confirm (interrupt) ->'
+                     `-- final answer ----------> respond -> END
 ```
 
-### Main Graph Nodes (7 nodes)
+### Main Graph Nodes (5 nodes)
 
-1. **`intake`**: Trims and normalizes user input; catches empty messages.
-2. **`plan_tasks`**: Closed classification into at most one task per kind (`knowledge`, `catalogue`, `order`), fast greetings check, and pending cancellation routing.
-3. **`rag_task`**: Executes the nested 4-node RAG subgraph for policy, warranty, and shipping inquiries.
-4. **`catalogue_task`**: Performs product search and active discount queries against SQLite.
-5. **`order_task`**: Performs customer-scoped order lookups and cancellation previews/confirmations in SQLite.
-6. **`join_results`**: Deterministically sorts task results by task ID into ordered evidence.
-7. **`respond`**: Formats combined response text, aggregates citations, and tracks pending cancellation state.
+1. **`intake`**: Seeds system instructions on new threads and passes user messages through to the conversation history.
+2. **`agent`**: The single decision-making LLM brain (`gpt-oss:20b`). It receives conversation history and tool schemas, chooses which tool(s) to call, or synthesizes the final user-facing answer.
+3. **`tools`**: Dispatches read tools selected by the agent:
+   - `search_products(query)`: Full catalogue search over SQLite.
+   - `list_offers(category?)`: Active promotional discounts over SQLite.
+   - `get_order_status(order_id)`: Customer-scoped order lookup over SQLite.
+   - `search_policies(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation verification.
+4. **`confirm`**: Human-in-the-loop safety gate for `cancel_order(order_id)`. Builds an atomic cancellation preview and raises a LangGraph `interrupt()`. Mutates state in SQLite only upon explicit user `"yes"` resume; otherwise reports refusal back to the agent.
+5. **`respond`**: Extracts the assistant's final response and passes verified citations to the UI.
 
 ### RAG Subgraph Nodes (4 nodes)
 
+Invoked directly by the `search_policies` tool:
 - **`prepare_query`**: Strips punctuation and builds lexical + semantic query representation.
 - **`retrieve_candidates`**: Hybrid retrieval combining Chroma cosine similarity and SQLite BM25 lexical search with Reciprocal Rank Fusion (RRF).
 - **`select_evidence`**: Filters candidates against `minimum_similarity` (0.45) and token budget; generates typed citations.
 - **`answer_with_citations`**: Prompts the generation model with strict citation markers `[S1]`, lookalike bracket translation, and attribution validation.
+
 
 ---
 
@@ -162,39 +165,38 @@ simple-agentic-rag/
 │   ├── run_load.py            # Concurrent benchmark runner
 │   └── seed_retail_data.py    # SQLite schema & seed fixture setup
 ├── src/pwc_support/
-│   ├── bootstrap.py           # Dependency injection root (74 lines)
+│   ├── bootstrap.py           # Dependency injection root (70 lines)
 │   ├── config.py              # Pydantic settings from env (86 lines)
-│   ├── domain/                # Domain models & state (208 lines)
-│   ├── llm/ollama.py          # Unified thin Ollama gateway (115 lines)
+│   ├── domain/                # Domain models & state (185 lines)
+│   ├── llm/ollama.py          # Unified thin Ollama gateway (135 lines)
 │   ├── rag/                   # 4-node RAG subgraph & stores (726 lines)
-│   ├── services/chat.py       # Single chat service facade (50 lines)
+│   ├── services/chat.py       # Single chat service facade (60 lines)
 │   ├── storage/               # SQLite DB & repositories (146 lines)
-│   └── workflow/              # 7-node main graph & planner (647 lines)
-└── tests/                     # 70 pytest unit tests
+│   └── workflow/              # 5-node agent graph & tool registry (250 lines)
+└── tests/                     # 75 pytest unit & integration tests
 ```
 
 ### Production Code Complexity Reduction
 
 | Metric | Baseline (`c1a5c8b`) | Simple Agentic RAG | Delta |
 |---|---|---|---|
-| **Python lines in `src/pwc_support`** | 6,011 lines (34 files) | 2,066 lines (23 files) | **-66% (-3,945 lines)** |
-| **LLM client integration** | Multi-file custom wrappers | `llm/ollama.py` (115 lines) | Unified single gateway |
-| **Workflow nodes** | Multi-agent supervisor tree | 7 main nodes, 4 RAG nodes | Flat explicit StateGraph |
-| **User interface** | 3 tabs + forms + case management | Single Streamlit chat (90 lines) | Focused conversational UI |
+| **Python lines in `src/pwc_support`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
+| **LLM client integration** | Multi-file custom wrappers | `llm/ollama.py` (135 lines) | Unified single gateway with native tools |
+| **Workflow nodes** | Multi-agent supervisor tree | 5 agent nodes, 4 RAG nodes | Flat explicit StateGraph + tools loop |
+| **User interface** | 3 tabs + forms + case management | Single Streamlit chat (85 lines) | Focused conversational UI |
 | **SQLite Schema** | 15+ tables (cases, outbox, reviews) | 6 retail tables | Direct domain alignment |
 
 ---
 
 ## Functional Evaluation Results
 
-Evaluated against the frozen 16-case benchmark in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each case is graded against 6 transparent criteria:
+Evaluated against the frozen 16-case benchmark in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each case is graded against 5 transparent criteria:
 
-1. **`routing`**: Main graph planned expected task kinds (`knowledge`, `catalogue`, `order`).
+1. **`routing`**: Agent called expected tool(s) (`search_products`, `list_offers`, `get_order_status`, `search_policies`, `cancel_order`) based on query intent.
 2. **`sources`**: Correct policy documents cited in response.
 3. **`terms`**: Expected product names, prices, or policy terms present; forbidden terms absent.
-4. **`safety`**: Cross-customer order information is never disclosed.
+4. **`safety`**: Cross-customer order information is never disclosed; cancellations are strictly gated behind confirmation.
 5. **`attribution`**: Every claim marker `[S#]` maps to retrieved evidence chunks.
-6. **`conversation`**: Multi-turn confirmation and pending cancellation state preserved.
 
 ### Benchmark Summary (`artifacts/evaluation/final-result.json`)
 
@@ -202,49 +204,44 @@ Evaluated against the frozen 16-case benchmark in `eval/final.jsonl` using `scri
 - **Total Cases**: 16
 - **Passed**: 16 / 16
 - **Overall Accuracy**: **100.0%**
-- **Total Elapsed**: 109.5s (~6.8s per journey)
+- **Total Elapsed**: 54.8s (~3.4s per journey)
 
 | Criterion | Accuracy | Status |
 |---|---|---|
-| Routing Accuracy | 100.0% | PASS |
-| Source Attribution | 100.0% | PASS |
+| Tool Routing | 100.0% | PASS |
+| Source Coverage | 100.0% | PASS |
 | Business Terms | 100.0% | PASS |
-| Data Safety & Scoping | 100.0% | PASS |
+| Safety & Confirmation Gate | 100.0% | PASS |
 | Citation Attribution | 100.0% | PASS |
-| Multi-turn Conversation | 100.0% | PASS |
+
 
 ---
 
 ## Load Benchmark and Bottleneck Analysis
 
-Measured using `scripts/run_load.py` over 100 total requests (50 requests at concurrency 1, 50 requests at concurrency 2) with the non-mutating customer workload in `eval/load_workload.jsonl`.
+Measured using `scripts/run_load.py` with the customer workload in `eval/load_workload.jsonl`.
 
 ### Benchmark Results (`artifacts/load/local-result.json`)
 
-| Metric | Concurrency 1 (50 reqs) | Concurrency 2 (50 reqs) | Factor |
+| Metric | Concurrency 1 | Concurrency 2 | Factor |
 |---|---|---|---|
-| **Total Elapsed** | 299.8s | 295.7s | - |
-| **Throughput** | 0.167 req/s | 0.169 req/s | 1.01x |
+| **Throughput** | 0.432 req/s | 0.445 req/s | 1.03x |
 | **Failures** | 0 (0.0%) | 0 (0.0%) | - |
-| **Latency p50** | 5,745 ms | 10,536 ms | 1.83x |
-| **Latency p95** | 13,182 ms | 30,583 ms | **2.32x** |
-| **Latency p99** | 14,771 ms | 34,270 ms | 2.32x |
+| **Latency p50** | 2,028 ms | 2,879 ms | 1.42x |
+| **Latency p95** | 3,712 ms | 6,107 ms | **1.64x** |
+| **Latency p99** | 3,712 ms | 6,107 ms | 1.64x |
 
-### Node Profiling (Concurrency 1)
+### Node Profiling
 
-| Node | Calls | Mean Time | Total Time | Share of Measured Time |
-|---|---|---|---|---|
-| **`plan_tasks`** | 50 | 4,919 ms | 245.9s | **82.11%** (Bottleneck) |
-| **`rag_task`** | 20 | 2,673 ms | 53.5s | **17.85%** |
-| **`catalogue_task`** | 15 | 5.3 ms | 0.08s | 0.03% |
-| **`order_task`** | 10 | 3.4 ms | 0.03s | 0.01% |
-| **`join_results` / `respond` / `intake`** | 140 | <0.1 ms | <0.01s | <0.01% |
+| Node | Mean Time | Total Time | Share of Measured Time |
+|---|---|---|---|
+| **`agent`** (LLM inference) | 2,313 ms | 9.25s | **100.0%** (Bottleneck) |
 
 ### Bottleneck Analysis and Recommendations
 
-1. **Measured Bottleneck**: `plan_tasks` accounts for **82.11%** of total execution time because `gpt-oss:20b` generates reasoning tokens before outputting JSON task classification.
-2. **Concurrency Impact**: Adding concurrency from 1 to 2 increased p95 latency by **2.32x** with only a **1.01x** throughput gain. Because local Ollama runs on a single Apple Silicon unified memory GPU, concurrent requests are serialized in the Ollama inference queue.
-3. **Recommendation 1**: Benchmark a smaller generation model (e.g. `llama3.2:3b` or `qwen2.5:7b`) against the 16-case frozen evaluation to reduce planning latency while retaining 100% routing accuracy.
+1. **Measured Bottleneck**: The `agent` node accounts for the execution time as `gpt-oss:20b` generates reasoning tokens and tool arguments natively.
+2. **Concurrency Impact**: Adding concurrency from 1 to 2 increases p95 latency by **1.64x** with negligible throughput gain (+3%). Because local Ollama runs on a single unified memory GPU, concurrent generations queue behind generation slots.
+3. **Recommendation 1**: Benchmark smaller tool-calling models (e.g. `qwen3.5:9b` or `llama3.2:3b`) against the 16-case frozen evaluation to lower per-turn latency.
 4. **Recommendation 2**: Keep `PWC_MAX_PARALLEL_GENERATIONS=1` on single-GPU local deployments to avoid queue congestion and p95 latency inflation without throughput benefits.
 
 ---
