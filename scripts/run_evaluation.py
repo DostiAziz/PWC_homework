@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pwc_support.bootstrap import build_runtime
-from pwc_support.config import Settings
-from pwc_support.domain.models import ChatReply
-from pwc_support.storage.database import Database
+from bootstrap import build_runtime
+from config import Settings
+from domain.models import ChatReply
+from storage.database import Database
 
 try:
     from scripts.seed_retail_data import seed

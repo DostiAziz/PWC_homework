@@ -2,9 +2,9 @@ from decimal import Decimal
 
 import pytest
 
-from pwc_support.domain.models import CancellationPreview
-from pwc_support.storage.database import Database
-from pwc_support.storage.retail_repositories import (
+from domain.models import CancellationPreview
+from storage.database import Database
+from storage.retail_repositories import (
     CancellationConflict,
     OrderRepository,
     ProductRepository,

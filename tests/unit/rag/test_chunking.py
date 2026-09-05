@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pwc_support.rag.ingest import (
+from rag.ingest import (
     ChunkingConfig,
     CorpusDocument,
     chunk_document,

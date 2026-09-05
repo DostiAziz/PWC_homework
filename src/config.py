@@ -65,24 +65,31 @@ class Settings(BaseModel):
 
     @classmethod
     def from_env(cls) -> Settings:
-        retail_db_override = os.getenv("PWC_RETAIL_DB_PATH")
+        def _get(key: str, default: str | None = None) -> str | None:
+            return os.getenv(
+                f"CUSTOMER_{key}",
+                os.getenv(f"RETAIL_{key}", os.getenv(f"PWC_{key}", default)),
+            )
+
+        retail_db_override = _get("DB_PATH", os.getenv("PWC_RETAIL_DB_PATH"))
         return cls(
-            data_dir=Path(os.getenv("PWC_DATA_DIR", "data")),
-            artifacts_dir=Path(os.getenv("PWC_ARTIFACTS_DIR", "artifacts")),
+            data_dir=Path(_get("DATA_DIR", "data") or "data"),
+            artifacts_dir=Path(_get("ARTIFACTS_DIR", "artifacts") or "artifacts"),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             chroma_mode=cast(Literal["persistent", "http"], os.getenv("CHROMA_MODE", "persistent")),
             chroma_host=os.getenv("CHROMA_HOST", "127.0.0.1"),
             chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
-            chunk_size_tokens=int(os.getenv("PWC_CHUNK_SIZE_TOKENS", "300")),
-            chunk_overlap_tokens=int(os.getenv("PWC_CHUNK_OVERLAP_TOKENS", "50")),
-            generation_model=os.getenv("PWC_GENERATION_MODEL", "gpt-oss:20b"),
-            embedding_model=os.getenv(
-                "PWC_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-            ),
-            answer_tokens=int(os.getenv("PWC_ANSWER_TOKENS", "512")),
-            num_ctx=int(os.getenv("PWC_NUM_CTX", "8192")),
-            schema_tokens=int(os.getenv("PWC_SCHEMA_TOKENS", "1024")),
-            request_timeout_seconds=float(os.getenv("PWC_REQUEST_TIMEOUT_SECONDS", "120")),
-            max_parallel_generations=int(os.getenv("PWC_MAX_PARALLEL_GENERATIONS", "1")),
+            chunk_size_tokens=int(_get("CHUNK_SIZE_TOKENS", "300") or "300"),
+            chunk_overlap_tokens=int(_get("CHUNK_OVERLAP_TOKENS", "50") or "50"),
+            generation_model=_get("GENERATION_MODEL", "gpt-oss:20b") or "gpt-oss:20b",
+            embedding_model=_get(
+                "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+            )
+            or "sentence-transformers/all-MiniLM-L6-v2",
+            answer_tokens=int(_get("ANSWER_TOKENS", "512") or "512"),
+            num_ctx=int(_get("NUM_CTX", "8192") or "8192"),
+            schema_tokens=int(_get("SCHEMA_TOKENS", "1024") or "1024"),
+            request_timeout_seconds=float(_get("REQUEST_TIMEOUT_SECONDS", "120") or "120"),
+            max_parallel_generations=int(_get("MAX_PARALLEL_GENERATIONS", "1") or "1"),
             retail_db_path=Path(retail_db_override) if retail_db_override else None,
         )

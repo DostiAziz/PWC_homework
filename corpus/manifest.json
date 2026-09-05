@@ -7,21 +7,21 @@
       "version": "2026-09-04",
       "path": "documents/shipping-and-orders.md",
       "title": "Shipping and order support",
-      "checksum": "feba309379e783b7c7cfd5e6c2b0fc25158a93c55b58f1a5d24d9902f3793d09"
+      "checksum": "e03ae6daecc5d412256dcfb942613a45b5a9cd08b5fe3a958e0016e9ead4bd03"
     },
     {
       "source_id": "cancellation-policy",
       "version": "2026-09-04",
       "path": "documents/cancellation-policy.md",
       "title": "Cancellation policy",
-      "checksum": "c960731e04ab354b98c155e63a44e1092c970c0ddd71684c1dab6ce33d32d229"
+      "checksum": "846a62c82109a8ef3f9a71934ae28d2fc491cd2a11d10de82473aaee40df565d"
     },
     {
       "source_id": "warranty-and-support",
       "version": "2026-09-04",
       "path": "documents/warranty-and-support.md",
       "title": "Warranty and support",
-      "checksum": "b0a50b1b59f94c44fa9e9982c86f1822e9d1a0d64abda0fbc8b92961724b5839"
+      "checksum": "524bbff9805cd3ad28ee50961ddbe3e485e559e77308d11e03049cde4e3a2a7b"
     }
   ]
 }

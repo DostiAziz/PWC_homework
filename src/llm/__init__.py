@@ -1,7 +1,7 @@
 """Local LLM and embedding integrations."""
 
-from pwc_support.llm.embeddings import HuggingFaceEmbedder, get_embeddings
-from pwc_support.llm.ollama import (
+from llm.embeddings import HuggingFaceEmbedder, get_embeddings
+from llm.ollama import (
     ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,

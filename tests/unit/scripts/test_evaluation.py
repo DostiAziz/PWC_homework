@@ -1,4 +1,4 @@
-from pwc_support.domain.models import ChatReply, Citation
+from domain.models import ChatReply, Citation
 from scripts.run_evaluation import score_case
 
 

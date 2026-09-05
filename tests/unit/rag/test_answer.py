@@ -1,5 +1,5 @@
-from pwc_support.domain.models import RagRequest, RetrievalBatch, RetrievalHit
-from pwc_support.rag.answer import RagAnswerer, prepare_query
+from domain.models import RagRequest, RetrievalBatch, RetrievalHit
+from rag.answer import RagAnswerer, prepare_query
 
 
 class FakeKnowledgeBase:

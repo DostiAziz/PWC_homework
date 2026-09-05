@@ -164,7 +164,7 @@ simple-agentic-rag/
 │   ├── run_evaluation.py      # 6-criterion journey evaluation
 │   ├── run_load.py            # Concurrent benchmark runner
 │   └── seed_retail_data.py    # SQLite schema & seed fixture setup
-├── src/pwc_support/
+├── src/
 │   ├── bootstrap.py           # Dependency injection root (70 lines)
 │   ├── config.py              # Pydantic settings from env (86 lines)
 │   ├── domain/                # Domain models & state (185 lines)
@@ -180,7 +180,7 @@ simple-agentic-rag/
 
 | Metric | Baseline (`c1a5c8b`) | Simple Agentic RAG | Delta |
 |---|---|---|---|
-| **Python lines in `src/pwc_support`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
+| **Python lines in `src/`** | 6,011 lines (34 files) | 1,658 lines (18 files) | **-72% (-4,353 lines)** |
 | **LLM client integration** | Multi-file custom wrappers | `llm/ollama.py` (135 lines) | Unified single gateway with native tools |
 | **Workflow nodes** | Multi-agent supervisor tree | 5 agent nodes, 4 RAG nodes | Flat explicit StateGraph + tools loop |
 | **User interface** | 3 tabs + forms + case management | Single Streamlit chat (85 lines) | Focused conversational UI |
@@ -242,7 +242,7 @@ Measured using `scripts/run_load.py` with the customer workload in `eval/load_wo
 1. **Measured Bottleneck**: The `agent` node accounts for the execution time as `gpt-oss:20b` generates reasoning tokens and tool arguments natively.
 2. **Concurrency Impact**: Adding concurrency from 1 to 2 increases p95 latency by **1.64x** with negligible throughput gain (+3%). Because local Ollama runs on a single unified memory GPU, concurrent generations queue behind generation slots.
 3. **Recommendation 1**: Benchmark smaller tool-calling models (e.g. `qwen3.5:9b` or `llama3.2:3b`) against the 16-case frozen evaluation to lower per-turn latency.
-4. **Recommendation 2**: Keep `PWC_MAX_PARALLEL_GENERATIONS=1` on single-GPU local deployments to avoid queue congestion and p95 latency inflation without throughput benefits.
+4. **Recommendation 2**: Keep `RETAIL_MAX_PARALLEL_GENERATIONS=1` on single-GPU local deployments to avoid queue congestion and p95 latency inflation without throughput benefits.
 
 ---
 

@@ -3,17 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from pwc_support.config import Settings
-from pwc_support.llm.embeddings import get_embeddings
-from pwc_support.llm.ollama import get_chat_model
-from pwc_support.rag.answer import RagAnswerer
-from pwc_support.rag.lexical import LexicalIndex
-from pwc_support.rag.store import ChromaKnowledgeBase, chroma_client
-from pwc_support.services.chat import AgentService
-from pwc_support.storage.database import Database
-from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
-from pwc_support.workflow.agent_graph import build_agent_graph
-from pwc_support.workflow.tools import ToolRegistry
+from config import Settings
+from llm.embeddings import get_embeddings
+from llm.ollama import get_chat_model
+from rag.answer import RagAnswerer
+from rag.lexical import LexicalIndex
+from rag.store import ChromaKnowledgeBase, chroma_client
+from services.chat import AgentService
+from storage.database import Database
+from storage.retail_repositories import OrderRepository, ProductRepository
+from workflow.agent_graph import build_agent_graph
+from workflow.tools import ToolRegistry
 
 RETRIEVAL_CONFIG = Path("config/retrieval.json")
 

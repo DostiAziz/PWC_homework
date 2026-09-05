@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pwc_support.storage.database import Database
+from storage.database import Database
 
 
 def test_schema_contains_only_current_business_tables(tmp_path: Path) -> None:

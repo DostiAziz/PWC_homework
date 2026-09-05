@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ollama
 
-from pwc_support.config import Settings
+from config import Settings
 
 settings = Settings.from_env()
 client = ollama.Client(host=settings.ollama_base_url)

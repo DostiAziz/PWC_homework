@@ -9,9 +9,9 @@ from uuid import uuid4
 from langchain_core.tools import BaseTool, tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from pwc_support.domain.models import CancellationPreview, Citation, RagRequest
-from pwc_support.rag.answer import RagAnswerer
-from pwc_support.storage.retail_repositories import (
+from domain.models import CancellationPreview, Citation, RagRequest
+from rag.answer import RagAnswerer
+from storage.retail_repositories import (
     CancellationConflict,
     OrderRepository,
     ProductRepository,
@@ -86,13 +86,20 @@ class ToolRegistry:
         order = self.orders.lookup(order_id, customer_id)
         if order is None:
             return "I could not find that order for this customer."
-        if order.fulfilment_status != "processing" or order.status not in {"processing", "paid"}:
-            reason = (
-                "because it has already shipped"
-                if order.fulfilment_status in {"shipped", "delivered"}
-                else "in its current state"
+        if order.status == "cancelled" or order.fulfilment_status == "cancelled":
+            return (
+                f"Order {order.order_id} cannot be cancelled because it has already been cancelled."
             )
-            return f"Order {order.order_id} cannot be cancelled {reason}."
+        if order.fulfilment_status == "delivered" or order.status == "delivered":
+            return (
+                f"Order {order.order_id} cannot be cancelled because it has already been delivered."
+            )
+        if order.fulfilment_status == "shipped" or order.status == "shipped":
+            return f"Order {order.order_id} cannot be cancelled because it has already shipped."
+        if order.fulfilment_status != "processing" or order.status not in {"processing", "paid"}:
+            return (
+                f"Order {order.order_id} cannot be cancelled in its current state ({order.status})."
+            )
         return CancellationPreview(
             confirmation_token=self.token_factory(),
             order_id=order.order_id,
@@ -130,7 +137,8 @@ class ToolRegistry:
         offers = self.products.list_active_offers(query=args.get("category"))
         body = (
             "\n".join(
-                f"{o.name} ({o.product_id}): {o.effective_price} {o.currency}, {o.description}"
+                f"Product: {o.name} | Product ID: {o.product_id} | "
+                f"Price: {o.effective_price} {o.currency} | Discount: {o.description}"
                 for o in offers
             )
             or "No active offers matched your request."

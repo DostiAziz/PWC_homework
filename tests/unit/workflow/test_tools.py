@@ -1,9 +1,9 @@
-from pwc_support.domain.models import CancellationPreview
-from pwc_support.rag.answer import RagAnswerer
-from pwc_support.storage.database import Database
-from pwc_support.storage.retail_repositories import OrderRepository, ProductRepository
-from pwc_support.workflow.tools import TOOL_SCHEMAS, ToolRegistry
+from domain.models import CancellationPreview
+from rag.answer import RagAnswerer
+from storage.database import Database
+from storage.retail_repositories import OrderRepository, ProductRepository
 from tests.fakes import FakeGenerator, FakeKnowledgeBase
+from workflow.tools import TOOL_SCHEMAS, ToolRegistry
 
 
 def _registry(retail_db: Database) -> ToolRegistry:

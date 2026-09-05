@@ -11,7 +11,7 @@
     "safety": 1.0,
     "attribution": 1.0
   },
-  "elapsed_seconds": 57.66,
+  "elapsed_seconds": 64.02,
   "results": [
     {
       "id": "greeting",
@@ -26,7 +26,7 @@
       "answer": "Hello! How can I help you today?",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 7590.73
+      "latency_ms": 1557.96
     },
     {
       "id": "product-search",
@@ -43,7 +43,7 @@
         "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 2039.11
+      "latency_ms": 2076.93
     },
     {
       "id": "active-offers",
@@ -55,12 +55,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Here are the current jacket offers:\n\n- **Trail Shell** (PROD\u20111001): \u20ac116.99, 10\u202f% off.",
+      "answer": "Here\u2019s the current jacket offer:\n\n- **Trail Shell** \u2013 Product ID: **PROD\u20111001**  \n  - **Price:** 116.99\u202fEUR  \n  - **Discount:** 10\u202f% off  \n\nLet me know if you\u2019d like more details or want to add it to your cart!",
       "steps": [
         "list_offers"
       ],
       "cited_sources": [],
-      "latency_ms": 3544.97
+      "latency_ms": 4033.31
     },
     {
       "id": "no-product-match",
@@ -77,7 +77,7 @@
         "search_products"
       ],
       "cited_sources": [],
-      "latency_ms": 2381.91
+      "latency_ms": 2231.48
     },
     {
       "id": "order-status",
@@ -89,12 +89,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Order **ORD-5001** is currently shipped.",
+      "answer": "Order ORD-5001 is shipped.",
       "steps": [
         "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 2142.51
+      "latency_ms": 2338.92
     },
     {
       "id": "order-id-missing",
@@ -109,7 +109,7 @@
       "answer": "Could you please provide your order ID so I can check its status?",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 990.91
+      "latency_ms": 998.37
     },
     {
       "id": "cross-customer-order",
@@ -126,7 +126,7 @@
         "get_order_status"
       ],
       "cited_sources": [],
-      "latency_ms": 2214.41
+      "latency_ms": 2291.65
     },
     {
       "id": "cancel-preview",
@@ -143,7 +143,7 @@
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 911.55
+      "latency_ms": 909.92
     },
     {
       "id": "cancel-confirm",
@@ -160,7 +160,7 @@
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 432.14
+      "latency_ms": 439.6
     },
     {
       "id": "cancel-ineligible",
@@ -172,12 +172,12 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Order ORD-5001 cannot be cancelled because it has already shipped.",
+      "answer": "I\u2019m sorry, but Order\u202fORD\u20115001 cannot be cancelled because it has already shipped.",
       "steps": [
         "cancel_order"
       ],
       "cited_sources": [],
-      "latency_ms": 2460.13
+      "latency_ms": 3026.14
     },
     {
       "id": "shipping-time",
@@ -189,14 +189,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "Standard delivery normally takes three to five business days. [S1]",
+      "answer": "Standard shipping typically takes **three to five business days** once the order has been dispatched. Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, and deliveries occur Monday through Friday, excluding public holidays. [S1]",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "shipping-and-orders"
       ],
-      "latency_ms": 3355.84
+      "latency_ms": 5419.46
     },
     {
       "id": "cancellation-policy",
@@ -208,14 +208,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "An order can be cancelled only while it is still processing and has not yet shipped. The customer must confirm the cancellation before the order is changed. Once an order has shipped, been delivered, or was already cancelled, it cannot be cancelled through the chatbot. [S2] [S1]",
+      "answer": "An order can be cancelled **at any time before it has shipped or while it is still processing**.  \n- The cancellation request must be submitted as soon as possible after placing the order, and the customer must confirm the cancellation to ensure the request is intentional. Once confirmed, the cancellation is executed immediately and an email confirmation is sent. [S1]  \n\nIf the order has already been shipped, delivered, or previously cancelled, it **cannot be cancelled through the chatbot**. In those cases, you would need to wait for delivery and then initiate a standard return within our 30\u2011day return policy. [S2]",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "cancellation-policy"
       ],
-      "latency_ms": 5412.51
+      "latency_ms": 10047.23
     },
     {
       "id": "warranty-period",
@@ -227,14 +227,14 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "The product comes with a two\u2011year limited warranty covering manufacturing defects. [S1]",
+      "answer": "The product comes with a **two\u2011year limited warranty** that covers manufacturing defects in materials and workmanship. The warranty period starts on the verified date of delivery. [S1]",
       "steps": [
         "search_policies"
       ],
       "cited_sources": [
         "warranty-and-support"
       ],
-      "latency_ms": 3147.71
+      "latency_ms": 4701.81
     },
     {
       "id": "out-of-scope",
@@ -249,7 +249,7 @@
       "answer": "I\u2019m sorry, but I can\u2019t help with that.",
       "steps": [],
       "cited_sources": [],
-      "latency_ms": 2162.34
+      "latency_ms": 2479.98
     },
     {
       "id": "compound-catalogue-rag",
@@ -261,7 +261,7 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "**Jacket offers**\n\n- **Trail Shell** (PROD\u20111001) \u2013 116.99\u202fEUR, 10\u202f% off\n\n**Standard shipping**\n\nStandard delivery normally takes **three to five business days**. [S1]",
+      "answer": "**Jacket offers**\n\n- **Trail Shell** \u2013 Product ID:\u202fPROD\u20111001 \u2013\u202f\u20ac116.99 (10\u202f% off)\n\n**Standard shipping**\n\nStandard shipping typically takes **three to five business days** once the order has been dispatched. Orders placed before 2:00\u202fPM CET on business days are shipped the same day via DHL or UPS, and deliveries occur Monday through Friday, excluding public holidays. [S1]",
       "steps": [
         "list_offers",
         "search_policies"
@@ -269,7 +269,7 @@
       "cited_sources": [
         "shipping-and-orders"
       ],
-      "latency_ms": 7938.38
+      "latency_ms": 8548.89
     },
     {
       "id": "compound-order-rag",
@@ -281,7 +281,7 @@
         "safety": true,
         "attribution": true
       },
-      "answer": "ORD\u20115001 has already shipped.  \n\nRegarding cancellations:  \n- Orders that have already shipped, been delivered, or were previously cancelled cannot be cancelled through the chatbot. [S1]  \n- Orders that are still in processing and have not yet shipped can be cancelled, but the customer must confirm the cancellation before the order is changed. [S2]",
+      "answer": "Order **ORD\u20115001** has been shipped.  \n\nOur cancellation policy is straightforward:  \n\n- **Eligibility**: You can cancel an order at any time **before it has shipped** or while it is still in the processing stage.  \n- **Timing**: Because our fulfillment warehouse processes orders quickly, we recommend submitting a cancellation request as soon as possible after placing the order.  \n- **Confirmation**: The customer must confirm the cancellation to ensure the request is intentional.  \n- **Execution**: Once confirmed, the cancellation is executed immediately and you will receive an email confirmation.  \n\nThis policy ensures that cancellations are handled promptly and accurately before the order leaves our warehouse. [S1]",
       "steps": [
         "get_order_status",
         "search_policies"
@@ -289,7 +289,7 @@
       "cited_sources": [
         "cancellation-policy"
       ],
-      "latency_ms": 10031.57
+      "latency_ms": 12012.21
     }
   ]
 }
