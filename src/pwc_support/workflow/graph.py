@@ -27,6 +27,7 @@ from pwc_support.workflow.planner import (
     PlanningUnavailable,
     is_greeting,
     parse_confirmation,
+    resumed_cancel_order_id,
 )
 
 GREETING_REPLY = (
@@ -83,6 +84,20 @@ def build_graph(
                 "confirmation": parse_confirmation(message),
                 "events": [_event("plan_tasks", "confirmation", started)],
             }
+        if state.get("awaiting_cancel"):
+            order_id = resumed_cancel_order_id(message)
+            if order_id is not None:
+                task = Task(
+                    task_id="task-1",
+                    kind=TaskKind.ORDER,
+                    request=message,
+                    order_id=order_id,
+                    order_action=OrderAction.CANCEL,
+                )
+                return {
+                    "tasks": (task,),
+                    "events": [_event("plan_tasks", "resume_cancel", started)],
+                }
         if is_greeting(message):
             return {
                 "tasks": (),
@@ -233,10 +248,12 @@ def build_graph(
                 ),
                 pending,
             )
+        awaiting_cancel = any(result.awaiting_cancel for result in results)
         return {
             "response": response,
             "citations": citations,
             "pending_cancellation": pending,
+            "awaiting_cancel": awaiting_cancel,
             "events": [_event("respond", "completed", started)],
         }
 

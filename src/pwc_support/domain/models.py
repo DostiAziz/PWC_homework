@@ -135,6 +135,7 @@ class TaskResult(DomainModel):
     citations: tuple[Citation, ...] = ()
     pending_cancellation: CancellationPreview | None = None
     clear_pending: bool = False
+    awaiting_cancel: bool = False
 
 
 class RetrievalHit(DomainModel):
@@ -186,4 +187,5 @@ class ChatReply(DomainModel):
     tasks: tuple[Task, ...] = ()
     events: tuple[TraceEvent, ...] = ()
     pending_cancellation: CancellationPreview | None = None
+    awaiting_cancel: bool = False
     total_duration_ms: float = Field(ge=0)

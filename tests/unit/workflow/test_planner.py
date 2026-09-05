@@ -57,6 +57,70 @@ def test_planner_decomposes_compound_request_once_per_kind() -> None:
     assert tasks[1].order_action is OrderAction.CANCEL
 
 
+def test_planner_expands_bare_knowledge_request_in_compound_plan() -> None:
+    model = FakeStructuredModel(
+        {
+            "tasks": [
+                {
+                    "kind": "catalogue",
+                    "request": "jacket offers",
+                    "product_query": "jacket",
+                    "catalogue_action": "offers",
+                },
+                {"kind": "knowledge", "request": "shipping"},
+            ]
+        }
+    )
+    message = "What jacket offers do you have and how long does standard shipping take?"
+
+    tasks = OllamaPlanner(model).plan(message)
+
+    knowledge = next(task for task in tasks if task.kind is TaskKind.KNOWLEDGE)
+    catalogue = next(task for task in tasks if task.kind is TaskKind.CATALOGUE)
+    assert knowledge.request == message
+    assert catalogue.request == "jacket offers"
+
+
+def test_planner_keeps_detailed_knowledge_request_in_compound_plan() -> None:
+    model = FakeStructuredModel(
+        {
+            "tasks": [
+                {
+                    "kind": "catalogue",
+                    "request": "jacket offers",
+                    "product_query": "jacket",
+                    "catalogue_action": "offers",
+                },
+                {"kind": "knowledge", "request": "how long does standard shipping take"},
+            ]
+        }
+    )
+
+    tasks = OllamaPlanner(model).plan("jacket offers and shipping time")
+
+    knowledge = next(task for task in tasks if task.kind is TaskKind.KNOWLEDGE)
+    assert knowledge.request == "how long does standard shipping take"
+
+
+def test_planner_treats_offer_wording_as_offers_even_if_model_says_search() -> None:
+    model = FakeStructuredModel(
+        {
+            "tasks": [
+                {
+                    "kind": "catalogue",
+                    "request": "What jacket offers do you have",
+                    "product_query": "jacket",
+                    "catalogue_action": "search",
+                },
+            ]
+        }
+    )
+
+    tasks = OllamaPlanner(model).plan("What jacket offers do you have?")
+
+    assert tasks[0].catalogue_action is CatalogueAction.OFFERS
+
+
 def test_planner_rejects_duplicate_task_kinds() -> None:
     model = FakeStructuredModel(
         {

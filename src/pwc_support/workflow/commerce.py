@@ -97,6 +97,7 @@ class CommerceTools:
                 task_id=task.task_id,
                 kind=task.kind,
                 message="Please provide the order ID or order number, for example ORD-2001.",
+                awaiting_cancel=True,
             )
         order = self.orders.lookup(task.order_id, customer_id)
         if order is None:

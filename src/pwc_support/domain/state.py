@@ -8,6 +8,7 @@ class SupportState(TypedDict, total=False):
     message: str
     customer_id: str
     pending_cancellation: CancellationPreview | None
+    awaiting_cancel: bool
     confirmation: Literal["yes", "no", "unclear"] | None
     task: Task
     tasks: tuple[Task, ...]

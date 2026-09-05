@@ -23,6 +23,7 @@ class ChatService:
         body: str,
         customer_id: str,
         pending_cancellation: CancellationPreview | None = None,
+        awaiting_cancel: bool = False,
     ) -> ChatReply:
         started = time.perf_counter()
         try:
@@ -31,6 +32,7 @@ class ChatService:
                     "message": body,
                     "customer_id": customer_id,
                     "pending_cancellation": pending_cancellation,
+                    "awaiting_cancel": awaiting_cancel,
                 }
             )
         except Exception:
@@ -46,5 +48,6 @@ class ChatService:
             tasks=tuple(terminal.get("tasks", ())),
             events=tuple(terminal.get("events", ())),
             pending_cancellation=terminal.get("pending_cancellation"),
+            awaiting_cancel=bool(terminal.get("awaiting_cancel", False)),
             total_duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )

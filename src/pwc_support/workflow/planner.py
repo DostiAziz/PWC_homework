@@ -19,6 +19,8 @@ For catalogue tasks: set catalogue_action to "search" or "offers".
 For order tasks: set order_action to "lookup" or "cancel", and extract order_id if mentioned.
 For knowledge tasks: policy, shipping, warranty, returns; leave actions null.
 Combine requests of the same kind into one task. Never invent an order ID.
+Copy the relevant part of the message into each task's request as a full question;
+do not shorten it to a single keyword.
 Return only the requested schema."""
 
 GREETING = re.compile(r"^(hi|hello|hey|good (morning|afternoon|evening))[!. ]*$", re.I)
@@ -28,6 +30,43 @@ NO = re.compile(
     re.I,
 )
 ORDER_ID_RE = re.compile(r"\b(ORD-\d+)\b", re.I)
+
+# Single-keyword task requests the model sometimes emits instead of the full question.
+# These retrieve poorly, so they are re-expanded from the original message.
+_BARE_REQUESTS = frozenset(
+    {
+        "search",
+        "offers",
+        "lookup",
+        "cancel",
+        "shipping",
+        "order",
+        "knowledge",
+        "catalogue",
+        "warranty",
+        "returns",
+        "return",
+        "policy",
+        "delivery",
+    }
+)
+
+# When a customer supplies only an order reference in reply to a cancellation prompt,
+# these words signal they switched to a status question instead of resuming the cancel.
+_LOOKUP_HINTS = ("where", "status", "track", "arriv", "deliver", "when")
+
+
+def _is_bare_request(text: str) -> bool:
+    return len(text.split()) <= 2 or text.casefold() in _BARE_REQUESTS
+
+
+def resumed_cancel_order_id(message: str) -> str | None:
+    """Return the order ID if a short reply resumes a pending cancellation request."""
+    lowered = message.casefold()
+    if any(hint in lowered for hint in _LOOKUP_HINTS):
+        return None
+    match = ORDER_ID_RE.search(message)
+    return match.group(1).upper() if match else None
 
 
 class PlanningUnavailable(RuntimeError):
@@ -110,12 +149,13 @@ class _TaskDraft(DomainModel):
     @model_validator(mode="after")
     def populate_defaults(self) -> _TaskDraft:
         if self.kind is TaskKind.CATALOGUE:
-            if self.catalogue_action is None:
-                text = (self.request + " " + (self.product_query or "")).casefold()
-                if any(w in text for w in ("offer", "discount", "deal", "sale", "promo")):
-                    self.catalogue_action = CatalogueAction.OFFERS
-                else:
-                    self.catalogue_action = CatalogueAction.SEARCH
+            text = (self.request + " " + (self.product_query or "")).casefold()
+            # Explicit offer wording is a reliable signal; trust it over the model's label,
+            # which sometimes returns "search" for a discount question.
+            if any(w in text for w in ("offer", "discount", "deal", "sale", "promo")):
+                self.catalogue_action = CatalogueAction.OFFERS
+            elif self.catalogue_action is None:
+                self.catalogue_action = CatalogueAction.SEARCH
             if not self.product_query or self.product_query.casefold() in ("search", "offers"):
                 extracted = _extract_product_query(self.request)
                 if extracted:
@@ -171,19 +211,11 @@ class OllamaPlanner:
             tasks: list[Task] = []
             for index, draft in enumerate(output.tasks, start=1):
                 data = draft.model_dump()
-                if len(output.tasks) == 1 and (
-                    len(draft.request.split()) <= 2
-                    or draft.request.casefold()
-                    in (
-                        "search",
-                        "offers",
-                        "lookup",
-                        "cancel",
-                        "shipping",
-                        "order",
-                        "knowledge",
-                        "catalogue",
-                    )
+                # A bare, keyword-only request retrieves poorly. Re-expand it from the full
+                # message for single-task plans, and for knowledge tasks in compound plans
+                # where the shipping/warranty question would otherwise be lost.
+                if _is_bare_request(draft.request) and (
+                    len(output.tasks) == 1 or draft.kind is TaskKind.KNOWLEDGE
                 ):
                     data["request"] = message
                     if draft.kind is TaskKind.CATALOGUE and not data.get("product_query"):
