@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from operator import add
-from typing import Annotated, Any, Protocol, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -22,10 +22,6 @@ SYSTEM_PROMPT = (
     "the order. To cancel an order, call cancel_order; the system will ask the customer to "
     "confirm. Be concise."
 )
-
-
-class ToolModel(Protocol):
-    def invoke(self, messages: list[BaseMessage] | list[Any]) -> Any: ...
 
 
 class AgentState(TypedDict, total=False):

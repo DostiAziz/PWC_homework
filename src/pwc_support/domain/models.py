@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -10,67 +9,11 @@ from pydantic import (
     Field,
     HttpUrl,
     StringConstraints,
-    field_validator,
-    model_validator,
 )
 
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class TaskKind(StrEnum):
-    KNOWLEDGE = "knowledge"
-    CATALOGUE = "catalogue"
-    ORDER = "order"
-
-
-class CatalogueAction(StrEnum):
-    SEARCH = "search"
-    OFFERS = "offers"
-
-
-class OrderAction(StrEnum):
-    LOOKUP = "lookup"
-    CANCEL = "cancel"
-
-
-class Task(DomainModel):
-    task_id: str = Field(pattern=r"^task-[1-3]$")
-    kind: TaskKind
-    request: str = Field(min_length=1, max_length=1000)
-    product_query: str | None = Field(default=None, max_length=200)
-    order_id: str | None = Field(default=None, max_length=64)
-    catalogue_action: CatalogueAction | None = None
-    order_action: OrderAction | None = None
-
-    @field_validator("order_id")
-    @classmethod
-    def normalize_order_id(cls, value: str | None) -> str | None:
-        return value.strip().upper() if value else None
-
-    @model_validator(mode="after")
-    def actions_match_kind(self) -> Task:
-        if self.kind is TaskKind.KNOWLEDGE and (
-            self.product_query is not None
-            or self.order_id is not None
-            or self.catalogue_action is not None
-            or self.order_action is not None
-        ):
-            raise ValueError("knowledge task cannot contain commerce fields")
-        if self.kind is TaskKind.CATALOGUE and (
-            self.catalogue_action is None
-            or self.order_id is not None
-            or self.order_action is not None
-        ):
-            raise ValueError("catalogue task contains invalid fields")
-        if self.kind is TaskKind.ORDER and (
-            self.order_action is None
-            or self.product_query is not None
-            or self.catalogue_action is not None
-        ):
-            raise ValueError("order task contains invalid fields")
-        return self
 
 
 class ProductSummary(DomainModel):
@@ -128,16 +71,6 @@ class Citation(DomainModel):
     similarity: float = Field(ge=-1.0, le=1.0)
 
 
-class TaskResult(DomainModel):
-    task_id: str
-    kind: TaskKind
-    message: str
-    citations: tuple[Citation, ...] = ()
-    pending_cancellation: CancellationPreview | None = None
-    clear_pending: bool = False
-    awaiting_cancel: bool = False
-
-
 class RetrievalHit(DomainModel):
     source_id: str
     chunk_id: str
@@ -173,12 +106,6 @@ class RagResult(DomainModel):
     hits: tuple[RetrievalHit, ...] = ()
     used_filter_fallback: bool = False
     evidence_conflict: bool = False
-
-
-class TraceEvent(DomainModel):
-    node: str
-    event_type: str
-    duration_ms: float | None = None
 
 
 class ChatReply(DomainModel):

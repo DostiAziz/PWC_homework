@@ -136,5 +136,4 @@ class ChatOpenAIAdapter:
 
 
 # Backward compatibility aliases
-ChatOllamaAdapter = ChatOpenAIAdapter
 OllamaGateway = ChatOpenAIAdapter

@@ -6,7 +6,6 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "chromadb==1.5.9",
   "langchain-huggingface>=1.2.2",
-  "langchain-ollama>=1.1.0",
   "langchain-openai>=1.6.0",
   "langgraph==1.2.11",
   "ollama==0.6.2",

@@ -2,7 +2,6 @@
 
 from pwc_support.llm.embeddings import HuggingFaceEmbedder, get_embeddings
 from pwc_support.llm.ollama import (
-    ChatOllamaAdapter,
     ChatOpenAIAdapter,
     OllamaGateway,
     OllamaUnavailable,
@@ -11,7 +10,6 @@ from pwc_support.llm.ollama import (
 )
 
 __all__ = [
-    "ChatOllamaAdapter",
     "ChatOpenAIAdapter",
     "HuggingFaceEmbedder",
     "OllamaGateway",
