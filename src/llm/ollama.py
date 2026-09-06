@@ -30,6 +30,7 @@ def get_chat_model(
     v1_url = base_url.rstrip("/")
     if not v1_url.endswith("/v1"):
         v1_url = f"{v1_url}/v1"
+    streaming = kwargs.pop("streaming", True)
     resolved_backend = backend or ChatOpenAI(
         model=model_name,
         base_url=v1_url,
@@ -38,6 +39,7 @@ def get_chat_model(
         timeout=request_timeout_seconds,
         max_completion_tokens=max_output_tokens,
         max_retries=2,
+        streaming=streaming,
         **kwargs,
     )
     return LimitedChatModel(
@@ -80,6 +82,27 @@ class LimitedChatModel:
                 if config is not None:
                     return self.backend.invoke(messages, config=config, **kwargs)
                 return self.backend.invoke(messages, **kwargs)
+        finally:
+            self._limiter.release()
+
+    def stream(
+        self,
+        messages: Any,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        with record_span("generation.queue", run_type="chain"):
+            acquired = self._limiter.acquire(timeout=self._acquisition_timeout_seconds)
+            if not acquired:
+                raise OllamaUnavailable(
+                    "Timed out waiting for an available local generation slot"
+                )
+        try:
+            with record_span("generation.stream", run_type="llm"):
+                if config is not None:
+                    yield from self.backend.stream(messages, config=config, **kwargs)
+                else:
+                    yield from self.backend.stream(messages, **kwargs)
         finally:
             self._limiter.release()
 

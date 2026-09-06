@@ -64,6 +64,19 @@ except Exception as error:
     st.code(str(error))
     st.stop()
 
+TOOL_LABELS: dict[str, str] = {
+    "search_knowledge_base": "Searching knowledge base...",
+    "search_products": "Searching product catalog...",
+    "list_offers": "Checking active offers...",
+    "get_order_status": "Checking order status...",
+    "cancel_order": "Processing order cancellation...",
+}
+
+
+def get_step_label(step: str) -> str:
+    return TOOL_LABELS.get(step, f"Running {step}...")
+
+
 st.sidebar.caption(f"Demo customer: {st.session_state.customer_id}")
 st.sidebar.caption(f"Generation: {runtime.settings.generation_model}")
 st.sidebar.caption(f"Indexed chunks: {runtime.knowledge_base.count()}")
@@ -77,21 +90,52 @@ for entry in st.session_state.messages:
 
 if question := st.chat_input("Ask about products, offers, policies, or your order"):
     st.session_state.messages.append({"role": "user", "content": question})
-    with st.spinner("Running locally"):
+    with st.chat_message("user"):
+        st.write(question)
+
+    with st.chat_message("assistant"):
+        status_box = st.status("Thinking...", expanded=True)
+        text_placeholder = st.empty()
+        streamed_text = ""
+        last_reply: ChatReply | None = None
+
         if st.session_state.awaiting_confirmation:
-            reply = runtime.service.resume(
+            stream = runtime.service.stream_resume(
                 thread_id=st.session_state.thread_id,
                 customer_id=st.session_state.customer_id,
                 decision=question,
             )
+            # runtime.service.resume route
         else:
-            reply = runtime.service.submit(
+            stream = runtime.service.stream_submit(
                 thread_id=st.session_state.thread_id,
                 body=question,
                 customer_id=st.session_state.customer_id,
             )
+
+        for event in stream:
+            if event.kind == "step":
+                status_box.write(get_step_label(event.step))
+            elif event.kind == "token":
+                status_box.update(label="Generating response...", state="running", expanded=False)
+                streamed_text += event.token
+                text_placeholder.markdown(streamed_text)
+            elif event.kind in ("done", "interrupt", "error"):
+                last_reply = event.reply
+
+        status_box.update(label="Complete", state="complete", expanded=False)
+        reply = last_reply or ChatReply(
+            message=streamed_text or "No response received.",
+            status="unavailable",
+        )
+        if reply.message and reply.message != streamed_text:
+            text_placeholder.markdown(reply.message)
+        render_citations(reply.citations)
+        render_trace(reply)
+
     st.session_state.awaiting_confirmation = reply.awaiting_confirmation
     st.session_state.messages.append(
         {"role": "assistant", "content": reply.message, "reply": reply}
     )
     st.rerun()
+

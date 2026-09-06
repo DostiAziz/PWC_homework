@@ -9,6 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv==0.5.11 && uv sync --frozen --no-dev
 
+COPY .streamlit ./.streamlit
+
 COPY src ./src
 COPY scripts ./scripts
 COPY corpus ./corpus
@@ -19,4 +21,4 @@ COPY app.py README.md ./
 EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')"
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.fileWatcherType=none"]
