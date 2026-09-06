@@ -1,5 +1,7 @@
 # Local Agentic RAG Retail Customer Support
 
+[![CI](https://github.com/DostiAziz/PWC_homework/actions/workflows/ci.yml/badge.svg)](https://github.com/DostiAziz/PWC_homework/actions/workflows/ci.yml)
+
 An locally hosted retail customer support AI assistant built with Python, LangGraph, and Ollama. The assistant resolves customer queries across product catalogues, promotional discounts, order tracking, and retail store policies by orchestrating between a local SQLite database and a grounded hybrid RAG subgraph with citation verification.
 
 Everything runs 100% locally on your machine with zero external API calls:
