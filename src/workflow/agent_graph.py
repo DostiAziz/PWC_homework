@@ -68,6 +68,136 @@ class AgentState(TypedDict, total=False):
     iteration_limit: bool
 
 
+def _prepare_messages_for_llm(
+    messages: list[BaseMessage | dict[str, Any]],
+) -> list[BaseMessage | dict[str, Any]]:
+    """Format dialogue history by ensuring SystemMessage is strictly at index 0."""
+    history = [
+        m
+        for m in messages
+        if not (isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system"))
+    ]
+    return [SystemMessage(content=SYSTEM_PROMPT), *history]
+
+
+def _invoke_model(
+    bound_model: Any, messages: list[Any], tool_defs: list[dict[str, Any]]
+) -> AIMessage:
+    """Invoke the underlying model supporting LangChain invoke, chat_with_tools, or callable."""
+    try:
+        if hasattr(bound_model, "invoke"):
+            res = bound_model.invoke(messages)
+            return res if isinstance(res, AIMessage) else AIMessage(content=str(res))
+        elif hasattr(bound_model, "chat_with_tools"):
+            raw = bound_model.chat_with_tools(messages=messages, tools=tool_defs)
+            if isinstance(raw, dict):
+                calls = [
+                    {
+                        "name": c["name"],
+                        "args": c.get("arguments") or c.get("args") or {},
+                        "id": c.get("id") or f"call_{c['name']}",
+                    }
+                    for c in raw.get("tool_calls", [])
+                ]
+                return AIMessage(content=raw.get("content", ""), tool_calls=calls)
+            return raw if isinstance(raw, AIMessage) else AIMessage(content=str(raw))
+        else:
+            res = bound_model(messages)
+            return res if isinstance(res, AIMessage) else AIMessage(content=str(res))
+    except Exception:
+        logger.exception("LLM invocation failed in agent node")
+        return AIMessage(
+            content=(
+                "I'm having trouble processing your request right now. "
+                "Could you please try rephrasing your question?"
+            )
+        )
+
+
+def _execute_tool_batch(
+    raw_calls: list[dict[str, Any]],
+    state: AgentState,
+    registry: ToolRegistry,
+) -> tuple[list[ToolMessage], list[str], tuple[Citation, ...], list[PendingCancellation]]:
+    """Execute tool calls: queue cancellations for approval and run safe read tools."""
+    results: list[ToolMessage] = []
+    steps: list[str] = []
+    citations: tuple[Citation, ...] = state.get("citations", ())
+    pending_cancellations: list[PendingCancellation] = list(
+        state.get("pending_cancellations", [])
+    )
+    seen_cancellation_orders: set[str] = set()
+
+    for call in raw_calls:
+        name = call.get("name", "")
+        args = call.get("args") or call.get("arguments") or {}
+        call_id = call.get("id") or f"call_{name}"
+
+        if name == "cancel_order":
+            order_id = str(args.get("order_id", ""))
+            if order_id in seen_cancellation_orders:
+                results.append(
+                    ToolMessage(
+                        content=(
+                            f"Duplicate cancellation request for order {order_id} "
+                            "in the same turn."
+                        ),
+                        name=name,
+                        tool_call_id=call_id,
+                    )
+                )
+                steps.append(name)
+                continue
+            seen_cancellation_orders.add(order_id)
+            preview = registry.build_cancellation(order_id, state.get("customer_id", ""))
+            if isinstance(preview, str):
+                results.append(ToolMessage(content=preview, name=name, tool_call_id=call_id))
+                steps.append(name)
+            else:
+                pending_cancellations.append(
+                    PendingCancellation(tool_call_id=call_id, preview=preview)
+                )
+        else:
+            outcome = registry.run(name, args, customer_id=state.get("customer_id", ""))
+            content = outcome.content
+            if outcome.citations:
+                start_idx = len(citations)
+                renumbered: list[Citation] = []
+                for i, c in enumerate(outcome.citations, start=start_idx + 1):
+                    new_marker = f"[S{i}]"
+                    if c.marker != new_marker:
+                        content = content.replace(c.marker, new_marker)
+                    renumbered.append(c.model_copy(update={"marker": new_marker}))
+                citations = citations + tuple(renumbered)
+            results.append(ToolMessage(content=content, name=name, tool_call_id=call_id))
+            steps.append(name)
+
+    return results, steps, citations, pending_cancellations
+
+
+def _validate_response_citations(
+    text: str, available: tuple[Citation, ...]
+) -> tuple[str, tuple[Citation, ...]]:
+    """Ensure citation markers are grounded in tool results to prevent hallucination."""
+    used_markers = set(re.findall(r"\[S\d+\]", text))
+    valid_markers = {c.marker for c in available}
+    unknown_markers = used_markers - valid_markers
+
+    if unknown_markers:
+        return (
+            "I cannot verify all policy citations in this response. "
+            "Please refer to our published policies.",
+            (),
+        )
+    filtered_citations = tuple(c for c in available if c.marker in used_markers)
+    return text, filtered_citations
+
+
+def _route_pending_or_agent(state: AgentState) -> str:
+    """Route to confirm if human approvals are pending, otherwise return to agent."""
+    return "confirm" if state.get("pending_cancellations") else "agent"
+
+
 def build_agent_graph(
     *, model: Any, registry: ToolRegistry, max_iterations: int = 6
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
@@ -75,11 +205,7 @@ def build_agent_graph(
     bound_model = model.bind_tools(tool_defs) if hasattr(model, "bind_tools") else model
 
     def intake(state: AgentState) -> dict[str, Any]:
-        has_system = any(
-            isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system")
-            for m in state.get("messages", [])
-        )
-        updates: dict[str, Any] = {
+        return {
             "iterations": 0,
             "steps": Overwrite([]),
             "citations": (),
@@ -87,42 +213,10 @@ def build_agent_graph(
             "pending_cancellations": [],
             "iteration_limit": False,
         }
-        if not has_system:
-            updates["messages"] = [SystemMessage(content=SYSTEM_PROMPT)]
-        return updates
 
     def agent(state: AgentState) -> dict[str, Any]:
-        msgs = list(state["messages"])
-        system_msgs = [m for m in msgs if isinstance(m, SystemMessage)]
-        other_msgs = [m for m in msgs if not isinstance(m, SystemMessage)]
-        ordered = system_msgs + other_msgs
-        try:
-            if hasattr(bound_model, "invoke"):
-                message = bound_model.invoke(ordered)
-            elif hasattr(bound_model, "chat_with_tools"):
-                raw = bound_model.chat_with_tools(messages=ordered, tools=tool_defs)
-                if isinstance(raw, dict):
-                    calls = [
-                        {
-                            "name": c["name"],
-                            "args": c.get("arguments") or c.get("args") or {},
-                            "id": c.get("id") or f"call_{c['name']}",
-                        }
-                        for c in raw.get("tool_calls", [])
-                    ]
-                    message = AIMessage(content=raw.get("content", ""), tool_calls=calls)
-                else:
-                    message = raw
-            else:
-                message = bound_model(ordered)
-        except Exception:
-            logger.exception("LLM invocation failed in agent node")
-            message = AIMessage(
-                content=(
-                    "I'm having trouble processing your request right now. "
-                    "Could you please try rephrasing your question?"
-                )
-            )
+        ordered = _prepare_messages_for_llm(list(state.get("messages", [])))
+        message = _invoke_model(bound_model, ordered, tool_defs)
         return {"messages": [message], "iterations": state.get("iterations", 0) + 1}
 
     def route(state: AgentState) -> str:
@@ -143,71 +237,15 @@ def build_agent_graph(
             or (last.get("tool_calls") if isinstance(last, dict) else None)
             or []
         )
-        results: list[ToolMessage] = []
-        steps: list[str] = []
-        citations: tuple[Citation, ...] = state.get("citations", ())
-        pending_cancellations: list[PendingCancellation] = list(
-            state.get("pending_cancellations", [])
+        results, steps, citations, pending_cancellations = _execute_tool_batch(
+            raw_calls, state, registry
         )
-        seen_cancellation_orders: set[str] = set()
-
-        for call in raw_calls:
-            name = call.get("name", "")
-            args = call.get("args") or call.get("arguments") or {}
-            call_id = call.get("id") or f"call_{name}"
-
-            if name == "cancel_order":
-                order_id = str(args.get("order_id", ""))
-                if order_id in seen_cancellation_orders:
-                    results.append(
-                        ToolMessage(
-                            content=(
-                                f"Duplicate cancellation request for order {order_id} "
-                                "in the same turn."
-                            ),
-                            name=name,
-                            tool_call_id=call_id,
-                        )
-                    )
-                    steps.append(name)
-                    continue
-                seen_cancellation_orders.add(order_id)
-                preview = registry.build_cancellation(order_id, state["customer_id"])
-                if isinstance(preview, str):
-                    results.append(
-                        ToolMessage(content=preview, name=name, tool_call_id=call_id)
-                    )
-                    steps.append(name)
-                else:
-                    pending_cancellations.append(
-                        PendingCancellation(tool_call_id=call_id, preview=preview)
-                    )
-            else:
-                outcome = registry.run(name, args, customer_id=state["customer_id"])
-                content = outcome.content
-                if outcome.citations:
-                    start_idx = len(citations)
-                    renumbered: list[Citation] = []
-                    for i, c in enumerate(outcome.citations, start=start_idx + 1):
-                        new_marker = f"[S{i}]"
-                        if c.marker != new_marker:
-                            content = content.replace(c.marker, new_marker)
-                        renumbered.append(c.model_copy(update={"marker": new_marker}))
-                    citations = citations + tuple(renumbered)
-                results.append(ToolMessage(content=content, name=name, tool_call_id=call_id))
-                steps.append(name)
-
         return {
             "messages": results,
             "steps": steps,
             "citations": citations,
             "pending_cancellations": pending_cancellations,
         }
-
-    def route_after_tools(state: AgentState) -> str:
-        if state.get("pending_cancellations"):
-            return "confirm"
-        return "agent"
 
     def confirm(state: AgentState) -> dict[str, Any]:
         pending = list(state.get("pending_cancellations", []))
@@ -228,11 +266,6 @@ def build_agent_graph(
             "steps": ["cancel_order"],
             "pending_cancellations": pending,
         }
-
-    def route_after_confirm(state: AgentState) -> str:
-        if state.get("pending_cancellations"):
-            return "confirm"
-        return "agent"
 
     def respond(state: AgentState) -> dict[str, Any]:
         msgs = state.get("messages", [])
@@ -266,31 +299,20 @@ def build_agent_graph(
                         )
 
         answers = [
-            m.content
+            m.content if isinstance(m, AIMessage) else m.get("content", "")
             for m in current_msgs
             if (isinstance(m, AIMessage) and m.content)
             or (isinstance(m, dict) and m.get("role") == "assistant" and m.get("content"))
         ]
-        text = (
+        raw_text = (
             str(answers[-1])
             if answers and answers[-1]
             else "I'm not sure how to help with that."
         )
 
-        # Validate citations against active citation set
-        available = state.get("citations", ())
-        used_markers = set(re.findall(r"\[S\d+\]", text))
-        valid_markers = {c.marker for c in available}
-        unknown_markers = used_markers - valid_markers
-
-        if unknown_markers:
-            text = (
-                "I cannot verify all policy citations in this response. "
-                "Please refer to our published policies."
-            )
-            filtered_citations: tuple[Citation, ...] = ()
-        else:
-            filtered_citations = tuple(c for c in available if c.marker in used_markers)
+        text, filtered_citations = _validate_response_citations(
+            raw_text, state.get("citations", ())
+        )
 
         result: dict[str, Any] = {
             "response": text,
@@ -313,8 +335,9 @@ def build_agent_graph(
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "agent")
     builder.add_conditional_edges("agent", route)
-    builder.add_conditional_edges("tools", route_after_tools)
-    builder.add_conditional_edges("confirm", route_after_confirm)
+    builder.add_conditional_edges("tools", _route_pending_or_agent)
+    builder.add_conditional_edges("confirm", _route_pending_or_agent)
     builder.add_edge("respond", END)
     return builder.compile(checkpointer=MemorySaver())
+
 

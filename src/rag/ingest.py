@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_text_splitters import (
+    Language,
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
@@ -145,6 +149,75 @@ def load_documents(root: Path, manifest: tuple[CorpusDocument, ...]) -> tuple[Co
     return tuple(loaded)
 
 
+MARKDOWN_HEADERS = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+    ("####", "Header 4"),
+]
+
+
+def _split_into_sections(document: CorpusDocument) -> list[tuple[str, str]]:
+    path = PurePosixPath(document.path)
+    ext = path.suffix.lower()
+    text = document.text.strip()
+    if not text:
+        return []
+
+    if ext in {".md", ".markdown"}:
+        header_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=MARKDOWN_HEADERS,
+            strip_headers=True,
+        )
+        splits = header_splitter.split_text(text)
+        sections: list[tuple[str, str]] = []
+        for split in splits:
+            content = split.page_content.strip()
+            if not content:
+                continue
+            meta = split.metadata
+            heading = (
+                meta.get("Header 4")
+                or meta.get("Header 3")
+                or meta.get("Header 2")
+                or meta.get("Header 1")
+                or document.title
+            )
+            sections.append((heading, content))
+        if sections:
+            return sections
+
+    return [(document.title, text)]
+
+
+def _build_sub_splitter(path_str: str, config: ChunkingConfig) -> RecursiveCharacterTextSplitter:
+    ext = PurePosixPath(path_str).suffix.lower()
+
+    def length_fn(text: str) -> int:
+        return len(text.split())
+
+    if ext in {".md", ".markdown"}:
+        return RecursiveCharacterTextSplitter.from_language(
+            language=Language.MARKDOWN,
+            chunk_size=config.chunk_size_tokens,
+            chunk_overlap=config.chunk_overlap_tokens,
+            length_function=length_fn,
+        )
+    if ext in {".html", ".htm"}:
+        return RecursiveCharacterTextSplitter.from_language(
+            language=Language.HTML,
+            chunk_size=config.chunk_size_tokens,
+            chunk_overlap=config.chunk_overlap_tokens,
+            length_function=length_fn,
+        )
+    return RecursiveCharacterTextSplitter(
+        chunk_size=config.chunk_size_tokens,
+        chunk_overlap=config.chunk_overlap_tokens,
+        length_function=length_fn,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+
+
 def chunk_document(
     document: CorpusDocument,
     config: ChunkingConfig | None = None,
@@ -153,17 +226,16 @@ def chunk_document(
     resolved = config or ChunkingConfig()
     context_provider = contextualizer or MetadataContextualizer()
     checksum = hashlib.sha256(document.text.encode("utf-8")).hexdigest()
-    sections = _markdown_sections(document.text, document.title)
+    sections = _split_into_sections(document)
+    sub_splitter = _build_sub_splitter(document.path, resolved)
     chunks: list[CorpusChunk] = []
     index = 0
-    for heading, section in sections:
-        words = section.split()
-        step = resolved.chunk_size_tokens - resolved.chunk_overlap_tokens
-        for start in range(0, len(words), step):
-            window = words[start : start + resolved.chunk_size_tokens]
-            if not window:
+    for heading, section_text in sections:
+        sub_chunks = sub_splitter.split_text(section_text)
+        for sub_chunk in sub_chunks:
+            original = sub_chunk.strip()
+            if not original:
                 continue
-            original = " ".join(window)
             context = context_provider.contextualize(
                 document=document, heading=heading, chunk=original
             )
@@ -171,6 +243,7 @@ def chunk_document(
                 (document.source_id, document.version, heading, str(index), context, original)
             )
             chunk_id = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            token_count = len(original.split())
             chunks.append(
                 CorpusChunk(
                     chunk_id=chunk_id,
@@ -180,7 +253,7 @@ def chunk_document(
                     original_text=original,
                     context=context,
                     embedding_text=f"{context}\n\n{original}",
-                    token_count=len(window),
+                    token_count=token_count,
                     chunk_index=index,
                     document_version=document.version,
                     document_checksum=checksum,
@@ -190,8 +263,6 @@ def chunk_document(
                 )
             )
             index += 1
-            if start + resolved.chunk_size_tokens >= len(words):
-                break
     return tuple(chunks)
 
 
@@ -205,21 +276,3 @@ def prepare_chunks(
         for document in documents
         for chunk in chunk_document(document, config, contextualizer)
     )
-
-
-def _markdown_sections(text: str, default_heading: str) -> list[tuple[str, str]]:
-    heading = default_heading
-    body: list[str] = []
-    sections: list[tuple[str, str]] = []
-    for line in text.splitlines():
-        match = re.match(r"^#{1,6}\s+(.+)$", line.strip())
-        if match:
-            if body:
-                sections.append((heading, "\n".join(body).strip()))
-                body = []
-            heading = match.group(1).strip()
-        elif line.strip():
-            body.append(line.strip())
-    if body:
-        sections.append((heading, "\n".join(body).strip()))
-    return [(section_heading, section) for section_heading, section in sections if section]
