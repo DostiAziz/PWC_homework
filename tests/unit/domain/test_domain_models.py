@@ -46,6 +46,7 @@ def test_domain_reexports():
     assert RagResult is RagResultDirect
     assert TimingSpan is TimingSpanDirect
     assert ChatReply is ChatReplyDirect
+    assert issubclass(ProductSummary, DomainModel)
 
 
 def test_model_instantiation():
