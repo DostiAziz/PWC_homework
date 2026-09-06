@@ -4,11 +4,12 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src \
-    PATH="/app/.venv/bin:$PATH" \
-    STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+    PATH="/app/.venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv==0.5.11 && uv sync --frozen --no-dev
+
+COPY .streamlit ./.streamlit
 
 COPY src ./src
 COPY scripts ./scripts
