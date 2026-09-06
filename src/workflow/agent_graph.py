@@ -266,7 +266,7 @@ def build_agent_graph(
                         )
 
         answers = [
-            m.content
+            m.content if isinstance(m, AIMessage) else m.get("content", "")
             for m in current_msgs
             if (isinstance(m, AIMessage) and m.content)
             or (isinstance(m, dict) and m.get("role") == "assistant" and m.get("content"))
@@ -301,7 +301,7 @@ def build_agent_graph(
             result["messages"] = extra_messages
         return result
 
-    builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)
+    builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)  # type: ignore[type-var]
     for name, fn in [
         ("intake", intake),
         ("agent", agent),
