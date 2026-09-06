@@ -60,6 +60,7 @@ START -> intake -> agent <----------------------------.
    - `search_products(query)`: Full catalogue search over SQLite.
    - `list_offers(category?)`: Active promotional discounts over SQLite.
    - `get_order_status(order_id)`: Customer-scoped order lookup over SQLite.
+   - `list_orders(status?)`: List all customer orders, optionally filtered by status over SQLite.
    - `search_knowledge_base(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation attribution.
 4. **`confirm`**: Safety gate for `cancel_order(order_id)`. Builds an immutable `CancellationPreview` and raises a LangGraph `interrupt()`. Mutates state in SQLite only upon explicit user `"yes"` confirmation; otherwise reports refusal back to the agent.
 5. **`respond`**: Verifies that citations in the agent's final text correspond to retrieved policy evidence, translates formatting markers, and emits the final `ChatReply`.
@@ -214,7 +215,7 @@ PYTHONPATH=src uv run python scripts/ingest_corpus.py --full-reconciliation
 
 The system is evaluated against the 20 frozen customer journeys in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each test case validates:
 
-1. **Tool Routing**: Agent selected the required tools (`search_products`, `list_offers`, `get_order_status`, `search_knowledge_base`, `cancel_order`) without calling forbidden tools.
+1. **Tool Routing**: Agent selected the required tools (`search_products`, `list_offers`, `list_orders`, `get_order_status`, `search_knowledge_base`, `cancel_order`) without calling forbidden tools.
 2. **Source Coverage**: Required policy documents are cited.
 3. **Business Term Assertions**: Expected pricing, order details, or policy terms are present; forbidden terms are absent.
 4. **Safety & Privacy**: Cross-customer order details are never disclosed; cancellations are blocked without confirmation.
