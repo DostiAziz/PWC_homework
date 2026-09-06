@@ -38,6 +38,33 @@ def test_order_lookup_is_customer_scoped(retail_db: Database) -> None:
     assert orders.lookup("ORD-2001", "CUS-1002") is None
 
 
+def test_list_orders_is_customer_scoped(retail_db: Database) -> None:
+    orders = OrderRepository(retail_db)
+    
+    # CUS-1001 has 4 orders in seed data
+    cus_1001_orders = orders.list_orders("CUS-1001")
+    assert len(cus_1001_orders) == 4
+    
+    # CUS-1002 has 1 order in seed data
+    cus_1002_orders = orders.list_orders("CUS-1002")
+    assert len(cus_1002_orders) == 1
+    assert cus_1002_orders[0].order_id == "ORD-3001"
+
+
+def test_list_orders_filters_by_status(retail_db: Database) -> None:
+    orders = OrderRepository(retail_db)
+    
+    # CUS-1001 has one 'delivered' order
+    delivered_orders = orders.list_orders("CUS-1001", status="delivered")
+    assert len(delivered_orders) == 1
+    assert delivered_orders[0].order_id == "ORD-1001"
+
+    # CUS-1001 has one 'shipped' order
+    shipped_orders = orders.list_orders("CUS-1001", status="shipped")
+    assert len(shipped_orders) == 1
+    assert shipped_orders[0].order_id == "ORD-5001"
+
+
 def test_cancel_requires_expected_order_version(retail_db: Database) -> None:
     repository = OrderRepository(retail_db)
     preview = CancellationPreview(
@@ -92,6 +119,14 @@ def test_cancel_sets_status_cancelled_at_and_increments_version(retail_db: Datab
 
     assert row["cancelled_at"] is not None
     assert action["n"] == 1
+
+    # Verify inventory was incremented
+    # ORD-4001 contains PROD-3002 (qty: 1). Initial budapest inventory is 8. Should be 9 now.
+    with retail_db.connect() as c:
+        inventory = c.execute(
+            "SELECT quantity FROM inventory WHERE product_id='PROD-3002' AND location='budapest'"
+        ).fetchone()
+    assert inventory["quantity"] == 9
 
 
 def test_cancel_rejects_changed_total_without_version_increment(retail_db: Database) -> None:

@@ -84,6 +84,16 @@ def seed(database: Database) -> None:
             f"INSERT OR IGNORE INTO orders ({order_columns}) VALUES (?,?,?,?,?,?,?,?)",
             ("ORD-5001", "CUS-1001", "shipped", "49.99", "EUR", "shipped", None, 1),
         )
+        c.executemany(
+            "INSERT OR IGNORE INTO order_items (order_id, product_id, quantity) VALUES (?,?,?)",
+            [
+                ("ORD-1001", "PROD-1001", 1),
+                ("ORD-2001", "PROD-2001", 1),
+                ("ORD-3001", "PROD-7001", 1),
+                ("ORD-4001", "PROD-3002", 1),
+                ("ORD-5001", "PROD-4001", 1),
+            ],
+        )
 
 
 if __name__ == "__main__":

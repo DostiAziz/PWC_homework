@@ -1,8 +1,9 @@
 # Local Agentic RAG Retail Customer Support
 
-An enterprise-ready, locally hosted retail customer support AI assistant built with Python, LangGraph, and Ollama. The assistant resolves customer queries across product catalogues, promotional discounts, order tracking, and retail store policies by orchestrating between a local SQLite database and a grounded hybrid RAG subgraph with citation verification.
+An locally hosted retail customer support AI assistant built with Python, LangGraph, and Ollama. The assistant resolves customer queries across product catalogues, promotional discounts, order tracking, and retail store policies by orchestrating between a local SQLite database and a grounded hybrid RAG subgraph with citation verification.
 
 Everything runs 100% locally on your machine with zero external API calls:
+
 - **Generation**: `gpt-oss:20b` running locally on [Ollama](https://ollama.com/)
 - **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional dense vectors) via Hugging Face
 - **Relational Data**: Local SQLite (`retail-support-v1.sqlite3`) for orders, products, inventory, and promotions
@@ -13,6 +14,7 @@ Everything runs 100% locally on your machine with zero external API calls:
 
 ## Contents
 
+- [Problem Justification](#problem-justification)
 - [System Architecture](#system-architecture)
 - [Data Partitioning: SQLite vs RAG](#data-partitioning-sqlite-vs-rag)
 - [Order Cancellation & Safety Invariants](#order-cancellation--safety-invariants)
@@ -23,6 +25,14 @@ Everything runs 100% locally on your machine with zero external API calls:
 - [Load Benchmarking & Bottleneck Analysis](#load-benchmarking--bottleneck-analysis)
 - [PDF Requirement-to-Evidence Matrix](#pdf-requirement-to-evidence-matrix)
 - [Known Prototype Boundaries](#known-prototype-boundaries)
+
+---
+
+## Problem Justification
+
+- **Why is the problem relevant?** Retail customer support involves answering repetitive inquiries about order statuses, store policies, and available discounts. Automating this process reduces operational overhead and wait times while providing 24/7 service.
+- **What user needs does it address?** Customers need fast, accurate, and actionable answers to their specific questions (e.g., "Where is my order?" or "Can I cancel it?"). They want immediate resolution without navigating complex documentation or waiting for a human agent.
+- **Why is the agentic RAG approach advantageous?** Standard RAG only searches documents and cannot mutate state or look up relational facts. An *agentic* RAG approach combines semantic search over policies with deterministic tool use (SQL lookups for orders/products and transaction execution for cancellations). This enables a hybrid system that is both knowledgeable about general guidelines and highly capable of executing specific user commands safely.
 
 ---
 
@@ -48,13 +58,14 @@ START -> intake -> agent <----------------------------.
    - `search_products(query)`: Full catalogue search over SQLite.
    - `list_offers(category?)`: Active promotional discounts over SQLite.
    - `get_order_status(order_id)`: Customer-scoped order lookup over SQLite.
-   - `search_policies(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation attribution.
+   - `search_knowledge_base(question)`: Executes the nested 4-node RAG subgraph over policy documents with citation attribution.
 4. **`confirm`**: Safety gate for `cancel_order(order_id)`. Builds an immutable `CancellationPreview` and raises a LangGraph `interrupt()`. Mutates state in SQLite only upon explicit user `"yes"` confirmation; otherwise reports refusal back to the agent.
 5. **`respond`**: Verifies that citations in the agent's final text correspond to retrieved policy evidence, translates formatting markers, and emits the final `ChatReply`.
 
 ### RAG Subgraph Nodes (4 nodes)
 
-Invoked directly by the `search_policies` tool:
+Invoked directly by the `search_knowledge_base` tool:
+
 - **`prepare_query`**: Sanitizes punctuation and prepares lexical and semantic representations.
 - **`retrieve_candidates`**: Hybrid retrieval combining Chroma cosine similarity and SQLite BM25 lexical search with Reciprocal Rank Fusion (RRF).
 - **`select_evidence`**: Filters candidates against `minimum_similarity` (0.45) and token budget; generates typed citations.
@@ -67,7 +78,7 @@ See [`docs/architecture.md`](docs/architecture.md) for full architectural specif
 ## Data Partitioning: SQLite vs RAG
 
 | Destination | Data Type | Examples | Rationale |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **SQLite Relational DB** | Structured retail facts | Products, inventory, active offers, customer orders | Exact prices, stock counts, order statuses, and atomic state transitions require ACID guarantees, relational consistency, and deterministic queries without hallucination risk. |
 | **Chroma + BM25 RAG** | Semi-structured policy documents | Shipping rules, warranty coverage, return/cancellation policies | Natural-language policies require hybrid semantic and lexical retrieval, relevance filtering, and grounded citation attribution. |
 | **Direct / In-Memory** | Conversational flow & greetings | "Hello", invalid queries, out-of-scope questions | Direct responses avoid database queries and model latency when no external knowledge is required. |
@@ -82,10 +93,12 @@ Order cancellations modify persistent customer state and are guarded by five saf
 2. **Immutable Preview Before Mutation**: The assistant first retrieves the order, calculates expected totals, verifies status (`processing`), and requests confirmation: `"Cancel order ORD-2001 for 79.99 EUR? Please answer yes or no."`
 3. **Preview Authority**: The confirmation preview is generated solely by the deterministic `confirm` node and verified during resume. The LLM cannot hallucinate confirmation tokens or bypass the preview step.
 4. **Optimistic Locking & Atomic Mutation**: Cancellation executes inside an atomic `BEGIN IMMEDIATE` transaction matching order version, total, and status:
+
    ```sql
    UPDATE orders SET status = 'cancelled', version = version + 1
    WHERE order_id = ? AND customer_id = ? AND version = ? AND status = 'processing'
    ```
+
 5. **Idempotency & Replay Protection**: Each confirmation token is inserted into `cancellation_actions` (`confirmation_token TEXT PRIMARY KEY`). Replayed tokens return the cached result rather than re-executing.
 
 ---
@@ -101,6 +114,7 @@ Order cancellations modify persistent customer state and are guarded by five saf
 ### 1. Model Preparation
 
 Pull the generation model into Ollama:
+
 ```bash
 ollama pull gpt-oss:20b
 ```
@@ -110,6 +124,7 @@ Embeddings (`sentence-transformers/all-MiniLM-L6-v2`) are downloaded automatical
 ### 2. Dependency Synchronization
 
 Install project dependencies from the frozen lockfile:
+
 ```bash
 uv sync --frozen
 ```
@@ -117,6 +132,7 @@ uv sync --frozen
 ### 3. Environment Configuration
 
 Configuration is managed via environment variables with sensible defaults:
+
 - `OLLAMA_BASE_URL`: Ollama endpoint (default: `http://127.0.0.1:11434`)
 - `PWC_GENERATION_MODEL`: Generation model tag (default: `gpt-oss:20b`)
 - `PWC_EMBEDDING_MODEL`: Embedding model (default: `sentence-transformers/all-MiniLM-L6-v2`)
@@ -124,6 +140,7 @@ Configuration is managed via environment variables with sensible defaults:
 - `PWC_MAX_PARALLEL_GENERATIONS`: Max concurrent generation requests (default: `1`)
 
 Copy example environment if customizations are needed:
+
 ```bash
 cp .env.example .env
 ```
@@ -146,6 +163,7 @@ PYTHONPATH=src uv run python scripts/ingest_corpus.py
 ```bash
 PYTHONPATH=src uv run streamlit run app.py
 ```
+
 Open `http://localhost:8501` in your browser. Demo customer `CUS-1001` is pre-selected.
 
 ---
@@ -174,6 +192,7 @@ docker compose up --build -d
 Policy documents are located in `corpus/` (`cancellation-policy.md`, `shipping-and-orders.md`, `warranty-and-support.md`).
 
 The ingestion pipeline (`scripts/ingest_corpus.py`):
+
 - Splits documents into deterministic token chunks with configurable overlap (`chunk_size_tokens=300`, `chunk_overlap_tokens=50`).
 - Embeds chunks using `sentence-transformers/all-MiniLM-L6-v2` with normalized cosine vectors.
 - Builds an inverted BM25 index in SQLite for exact term matching.
@@ -192,7 +211,8 @@ PYTHONPATH=src uv run python scripts/ingest_corpus.py --full-reconciliation
 ## Functional Evaluation Results
 
 The system is evaluated against the 20 frozen customer journeys in `eval/final.jsonl` using `scripts/run_evaluation.py`. Each test case validates:
-1. **Tool Routing**: Agent selected the required tools (`search_products`, `list_offers`, `get_order_status`, `search_policies`, `cancel_order`) without calling forbidden tools.
+
+1. **Tool Routing**: Agent selected the required tools (`search_products`, `list_offers`, `get_order_status`, `search_knowledge_base`, `cancel_order`) without calling forbidden tools.
 2. **Source Coverage**: Required policy documents are cited.
 3. **Business Term Assertions**: Expected pricing, order details, or policy terms are present; forbidden terms are absent.
 4. **Safety & Privacy**: Cross-customer order details are never disclosed; cancellations are blocked without confirmation.
@@ -208,7 +228,7 @@ The system is evaluated against the 20 frozen customer journeys in `eval/final.j
 - **Total Elapsed**: 208.8s (~10.4s per journey)
 
 | Criterion | Accuracy | Status |
-|---|---|---|
+| --- | --- | --- |
 | **Tool Routing** | 100.0% | PASS |
 | **Source Coverage** | 100.0% | PASS |
 | **Business Terms** | 100.0% | PASS |
@@ -230,7 +250,7 @@ PYTHONPATH=src uv run python scripts/run_load.py --requests 50 --concurrency 1 2
 ### Benchmark Results (`artifacts/load/local-result.json`)
 
 | Metric | Concurrency 1 (50 reqs) | Concurrency 2 (50 reqs) | Delta / Ratio |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Throughput** | 0.213 req/s | 0.218 req/s | +2.3% (1.02x) |
 | **Failures** | 0 (0.0%) | 0 (0.0%) | Zero failures |
 | **Latency p50** | 2,530 ms | 5,669 ms | 2.24x inflation |
@@ -240,7 +260,7 @@ PYTHONPATH=src uv run python scripts/run_load.py --requests 50 --concurrency 1 2
 ### Component Span Breakdown
 
 | Component Span | Concurrency 1 Mean | Concurrency 1 Share | Concurrency 2 Mean | Concurrency 2 Share | Description |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | **`generation.invoke`** | 1,945.6 ms | **97.28%** (Bottleneck) | 1,908.3 ms | 45.21% | Local LLM inference (`gpt-oss:20b`) |
 | **`generation.queue`** | 0.0 ms | 0.00% | 2,224.6 ms | **52.71%** | Queue wait for local GPU generation slot |
 | **`retrieval`** | 107.9 ms | 2.16% | 174.4 ms | 1.65% | Hybrid Chroma + BM25 RAG retrieval |
@@ -258,13 +278,13 @@ PYTHONPATH=src uv run python scripts/run_load.py --requests 50 --concurrency 1 2
 ## PDF Requirement-to-Evidence Matrix
 
 | Requirement | Architecture & Code Implementation | Verification & Evidence Artifact |
-|---|---|---|
+| --- | --- | --- |
 | **Local Model Deployment** | `src/llm/ollama.py`, `src/config.py` (`gpt-oss:20b`, MiniLM) | `scripts/check_runtime.py`, `tests/unit/llm/test_ollama.py` |
 | **Relational Data Routing** | `src/storage/retail_repositories.py`, `src/workflow/tools.py` | `tests/unit/storage/test_retail_repositories.py`, `eval/final.jsonl` |
 | **Hybrid Policy RAG** | `src/rag/store.py`, `src/rag/subgraph.py` (Chroma + BM25 RRF) | `tests/unit/rag/test_store.py`, `tests/unit/rag/test_subgraph.py` |
 | **Strict Citation Grounding** | `src/rag/subgraph.py`, `src/workflow/agent_graph.py` (`respond`) | `tests/unit/workflow/test_agent_graph.py`, `artifacts/evaluation/` |
 | **Human-in-the-Loop Safety** | `src/workflow/agent_graph.py` (`confirm`), `src/services/chat.py` | `tests/unit/workflow/test_confirmation_flow.py` |
-| **Optimistic Concurrency Lock**| `src/storage/retail_repositories.py` (`OrderRepository.cancel`) | `tests/unit/storage/test_retail_repositories.py` |
+| **Optimistic Concurrency Lock** | `src/storage/retail_repositories.py` (`OrderRepository.cancel`) | `tests/unit/storage/test_retail_repositories.py` |
 | **Reproducible Ingestion** | `scripts/ingest_corpus.py`, `src/rag/ingest.py` | `tests/unit/rag/test_ingest.py` |
 | **20-Case Functional Eval** | `scripts/run_evaluation.py`, `eval/final.jsonl` | `artifacts/evaluation/final-result.json` |
 | **100-Query Load Test** | `scripts/run_load.py`, `src/observability.py` | `artifacts/load/local-result.json` |
