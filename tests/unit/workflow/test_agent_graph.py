@@ -1,3 +1,4 @@
+from langchain_core.messages import SystemMessage
 from langgraph.types import Command
 
 from rag import RagAnswerer
@@ -259,4 +260,46 @@ def test_mixed_tool_batch_executes_reads_and_queues_cancellation(retail_db: Data
     assert "cancel" in done["response"].lower()
     assert "get_order_status" in done["steps"]
     assert "cancel_order" in done["steps"]
+
+
+def test_checkpoint_does_not_store_system_message_in_history(retail_db: Database) -> None:
+    model = ScriptedModel(
+        [
+            {"role": "assistant", "content": "Hello!", "tool_calls": []},
+            {"role": "assistant", "content": "I am great!", "tool_calls": []},
+        ]
+    )
+    graph = build_agent_graph(model=model, registry=_registry(retail_db))
+    cfg = _config("clean_checkpoint_test")
+
+    # Turn 1
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "hi"}], "customer_id": "CUS-1001"},
+        cfg,
+    )
+    state = graph.get_state(cfg)
+    messages = state.values["messages"]
+    # Checkpoint should only contain dialogue turns (HumanMessage, AIMessage), NOT SystemMessage!
+    assert not any(
+        isinstance(m, SystemMessage) or getattr(m, "role", None) == "system"
+        for m in messages
+    )
+
+    # Turn 2
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "how are you?"}], "customer_id": "CUS-1001"},
+        cfg,
+    )
+    state_turn2 = graph.get_state(cfg)
+    messages_turn2 = state_turn2.values["messages"]
+    assert not any(
+        isinstance(m, SystemMessage) or getattr(m, "role", None) == "system"
+        for m in messages_turn2
+    )
+
+    # Verify that model itself still received SystemMessage at index 0 on both calls
+    assert len(model.calls) == 2
+    assert isinstance(model.calls[0][0], SystemMessage)
+    assert isinstance(model.calls[1][0], SystemMessage)
+
 
