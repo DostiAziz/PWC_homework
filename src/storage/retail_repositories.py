@@ -93,6 +93,36 @@ class OrderRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def list_orders(self, customer_id: str, status: str | None = None) -> tuple[OrderSummary, ...]:
+        with self.database.connect() as connection:
+            if status:
+                rows = connection.execute(
+                    "SELECT order_id, customer_id, status, total, currency, "
+                    "fulfilment_status, version FROM orders "
+                    "WHERE customer_id = ? AND status = ? ORDER BY order_id",
+                    (customer_id, status),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT order_id, customer_id, status, total, currency, "
+                    "fulfilment_status, version FROM orders "
+                    "WHERE customer_id = ? ORDER BY order_id",
+                    (customer_id,),
+                ).fetchall()
+
+        return tuple(
+            OrderSummary(
+                order_id=row["order_id"],
+                customer_id=row["customer_id"],
+                status=row["status"],
+                total=Decimal(str(row["total"])),
+                currency=row["currency"],
+                fulfilment_status=row["fulfilment_status"],
+                version=row["version"],
+            )
+            for row in rows
+        )
+
     def lookup(self, order_id: str, customer_id: str) -> OrderSummary | None:
         with self.database.connect() as connection:
             row = connection.execute(
@@ -148,6 +178,16 @@ class OrderRepository:
                 "VALUES (?, ?, ?, 'cancelled', ?, ?)",
                 (preview.confirmation_token, preview.order_id, preview.customer_id, now, now),
             )
+            items = connection.execute(
+                "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
+                (preview.order_id,)
+            ).fetchall()
+            for item in items:
+                connection.execute(
+                    "UPDATE inventory SET quantity = quantity + ? "
+                    "WHERE product_id = ? AND location = 'budapest'",
+                    (item["quantity"], item["product_id"])
+                )
             connection.commit()
         except Exception:
             connection.rollback()

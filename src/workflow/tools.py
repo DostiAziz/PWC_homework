@@ -43,6 +43,16 @@ def get_order_status(order_id: str) -> str:
 
 
 @tool
+def list_orders(status: str | None = None) -> str:
+    """List all orders for the current customer.
+    
+    Pass an optional status (e.g., 'shipped', 'delivered', 'processing') to filter orders,
+    or omit to list all orders.
+    """
+    return ""
+
+
+@tool
 def search_knowledge_base(question: str) -> str:
     """Search the knowledge base for information about shipping, delivery,
     returns, refunds, cancellation, warranty, and other support topics.
@@ -62,6 +72,7 @@ ALL_TOOLS: list[BaseTool] = [
     search_products,
     list_offers,
     get_order_status,
+    list_orders,
     search_knowledge_base,
     cancel_order,
 ]
@@ -162,6 +173,20 @@ class ToolRegistry:
         if order is None:
             return ToolOutcome(content="I could not find that order for this customer.")
         return ToolOutcome(content=f"Order {order.order_id} is {order.status}.")
+
+    def _list_orders(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
+        status = args.get("status")
+        orders = self.orders.list_orders(customer_id, status=status)
+        if not orders:
+            if status:
+                return ToolOutcome(content=f"You have no orders with status '{status}'.")
+            return ToolOutcome(content="You have no orders.")
+        
+        body = "\n".join(
+            f"Order ID: {o.order_id} | Status: {o.status} | Total: {o.total} {o.currency}"
+            for o in orders
+        )
+        return ToolOutcome(content=body)
 
     def _search_knowledge_base(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         result = self.rag.answer(RagRequest(question=str(args.get("question", ""))))

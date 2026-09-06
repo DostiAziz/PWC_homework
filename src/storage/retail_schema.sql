@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS orders (
     version INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS order_items (
+    order_id TEXT NOT NULL REFERENCES orders(order_id),
+    product_id TEXT NOT NULL REFERENCES products(product_id),
+    quantity INTEGER NOT NULL CHECK(quantity > 0),
+    PRIMARY KEY(order_id, product_id)
+);
+
 CREATE TABLE IF NOT EXISTS cancellation_actions (
     confirmation_token TEXT PRIMARY KEY,
     order_id TEXT NOT NULL REFERENCES orders(order_id),
