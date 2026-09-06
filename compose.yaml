@@ -9,6 +9,7 @@ services:
       CHROMA_PORT: "8000"
       PWC_GENERATION_MODEL: ${PWC_GENERATION_MODEL:-gpt-oss:20b}
       PWC_EMBEDDING_MODEL: ${PWC_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      STREAMLIT_SERVER_FILE_WATCHER_TYPE: "none"
     volumes:
       - app-data:/app/data
       - hf-cache:/root/.cache/huggingface

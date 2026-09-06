@@ -169,7 +169,9 @@ def test_turn_local_metadata_resets_across_turns(retail_db: Database) -> None:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"name": "search_knowledge_base", "arguments": {"question": "shipping"}}],
+                "tool_calls": [
+                    {"name": "search_knowledge_base", "arguments": {"question": "shipping"}}
+                ],
             },
             {
                 "role": "assistant",

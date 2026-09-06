@@ -42,6 +42,12 @@ class FakeChatModel:
         self.captured_messages = list(messages)
         return self.response
 
+    def stream(self, messages: list[BaseMessage], config: Any = None, **kwargs: Any) -> Any:
+        if isinstance(self.response, Exception):
+            raise self.response
+        self.captured_messages = list(messages)
+        yield self.response
+
     def bind_tools(self, tools: list[dict[str, Any]]) -> Any:
         self.bound_tools = tools
         return self
@@ -172,6 +178,21 @@ def test_generation_exception_releases_shared_slot() -> None:
     succeeding.release.set()
     model.backend = succeeding
     assert model.invoke([HumanMessage(content="second")]).content == "Hello from fake"
+
+
+def test_limited_chat_model_stream_yields_chunks_and_releases_limiter() -> None:
+    fake = FakeChatModel(response=AIMessage(content="Chunk response"))
+    model = get_chat_model(
+        max_output_tokens=64,
+        max_parallel_generations=1,
+        request_timeout_seconds=1,
+        backend=fake,
+    )
+    chunks = list(model.stream([HumanMessage(content="hi")]))
+    assert len(chunks) == 1
+    assert chunks[0].content == "Chunk response"
+    # Verify limiter was released and another call succeeds
+    assert model.invoke([HumanMessage(content="hi again")]).content == "Chunk response"
 
 
 def test_embedding_diagnostic_rejects_incompatible_collection() -> None:
