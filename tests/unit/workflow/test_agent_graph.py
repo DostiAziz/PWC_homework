@@ -69,7 +69,7 @@ def test_policy_answer_carries_citations(retail_db: Database) -> None:
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    {"name": "search_policies", "arguments": {"question": "shipping time"}}
+                    {"name": "search_knowledge_base", "arguments": {"question": "shipping time"}}
                 ],
             },
             {
@@ -169,7 +169,7 @@ def test_turn_local_metadata_resets_across_turns(retail_db: Database) -> None:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"name": "search_policies", "arguments": {"question": "shipping"}}],
+                "tool_calls": [{"name": "search_knowledge_base", "arguments": {"question": "shipping"}}],
             },
             {
                 "role": "assistant",
@@ -192,7 +192,7 @@ def test_turn_local_metadata_resets_across_turns(retail_db: Database) -> None:
         cfg,
     )
     assert len(turn1["citations"]) >= 1
-    assert "search_policies" in turn1["steps"]
+    assert "search_knowledge_base" in turn1["steps"]
 
     turn2 = graph.invoke(
         {"messages": [{"role": "user", "content": "hi"}], "customer_id": "CUS-1001"},

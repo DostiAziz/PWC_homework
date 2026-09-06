@@ -19,14 +19,20 @@ from storage.retail_repositories import (
 
 
 @tool
-def search_products(query: str) -> str:
-    """Search the retail catalogue for products by name or category."""
+def search_products(query: str = "") -> str:
+    """Search the retail catalogue for products by name or category.
+
+    Use an empty string to list all available products.
+    """
     return ""
 
 
 @tool
 def list_offers(category: str | None = None) -> str:
-    """List active discount offers, optionally filtered by product category."""
+    """List active discount offers.
+
+    Pass a category to filter, or omit to list all current offers.
+    """
     return ""
 
 
@@ -37,8 +43,12 @@ def get_order_status(order_id: str) -> str:
 
 
 @tool
-def search_policies(question: str) -> str:
-    """Answer a shipping, warranty, or cancellation policy question from the docs."""
+def search_knowledge_base(question: str) -> str:
+    """Search the knowledge base for information about shipping, delivery,
+    returns, refunds, cancellation, warranty, and other support topics.
+
+    Pass a clear question like 'return policy' or 'shipping time'.
+    """
     return ""
 
 
@@ -52,7 +62,7 @@ ALL_TOOLS: list[BaseTool] = [
     search_products,
     list_offers,
     get_order_status,
-    search_policies,
+    search_knowledge_base,
     cancel_order,
 ]
 
@@ -153,13 +163,13 @@ class ToolRegistry:
             return ToolOutcome(content="I could not find that order for this customer.")
         return ToolOutcome(content=f"Order {order.order_id} is {order.status}.")
 
-    def _search_policies(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
+    def _search_knowledge_base(self, args: dict[str, Any], customer_id: str) -> ToolOutcome:
         result = self.rag.answer(RagRequest(question=str(args.get("question", ""))))
         if result.status != "answered":
             return ToolOutcome(
                 content=(
-                    "I could not find grounded policy information for that question. "
-                    "Our retail support documents do not contain that information."
+                    "I could not find relevant information for that question "
+                    "in our knowledge base."
                 )
             )
         return ToolOutcome(content=result.answer, citations=result.citations)

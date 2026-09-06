@@ -69,7 +69,7 @@ def test_score_case_valid_citation() -> None:
     )
     case = {
         "id": "shipping-time",
-        "expected_tools": ["search_policies"],
+        "expected_tools": ["search_knowledge_base"],
         "required_sources": ["shipping-and-orders"],
         "required_terms": ["three"],
         "forbidden_terms": [],
@@ -79,7 +79,7 @@ def test_score_case_valid_citation() -> None:
     reply = ChatReply(
         message="Shipping takes three to five business days. [S1]",
         citations=(citation,),
-        steps=("search_policies",),
+        steps=("search_knowledge_base",),
         total_duration_ms=12.0,
     )
     score = score_case(case, reply)

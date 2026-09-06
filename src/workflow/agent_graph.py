@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from operator import add
 from typing import Annotated, Any, TypedDict
@@ -14,15 +15,35 @@ from langgraph.types import Overwrite, interrupt
 from domain.models import Citation, PendingCancellation
 from workflow.tools import TOOL_SCHEMAS, ToolRegistry
 
+logger = logging.getLogger(__name__)
+
 SYSTEM_PROMPT = (
     "You are a retail customer support agent. Use the tools to answer questions about "
-    "products, offers, orders, and policies. When answering from tool results, include the "
-    "relevant details such as prices and order numbers. Only answer policy questions from the "
-    "search_policies tool result, keeping its [S1] citation markers verbatim; never state "
-    "policy from your own knowledge. If an order is not found, state that you could not find "
-    "the order. When an order is cancelled, state that the order has been cancelled. "
-    "If an order is not cancelled or cancellation is declined, state that the order "
-    "was not cancelled. "
+    "products, offers, orders, and policies.\n\n"
+    "PROACTIVE TOOL USE:\n"
+    "- When the customer asks about products (e.g. 'tell me about products', 'show me all "
+    "products', 'what do you have'), call search_products with an empty query to list all "
+    "available products.\n"
+    "- When the customer asks about offers or deals, call list_offers to show current offers.\n"
+    "- When the customer asks about any policy (returns, refunds, shipping, cancellation, "
+    "warranty), call search_knowledge_base with the relevant topic. If the first search returns "
+    "nothing, try rephrasing (e.g. 'return policy' -> try 'cancellation' or 'refund').\n"
+    "- ALWAYS use a tool rather than saying you don't have information. Try at least one "
+    "tool call before telling the customer you cannot help.\n\n"
+    "TYPO TOLERANCE:\n"
+    "- Customers may make typos or misspell words (e.g. 'pilicy' = 'policy', "
+    "'mme' = 'me', 'jacke' = 'jacket'). Interpret the intent and correct the spelling "
+    "when passing queries to tools. Never pass misspelled words to tool arguments.\n\n"
+    "TOOL RESULT HANDLING:\n"
+    "- When answering from tool results, include relevant details such as prices and "
+    "order numbers.\n"
+    "- Only answer policy questions from the search_knowledge_base tool result, keeping its "
+    "[S1] citation markers verbatim; never state policy from your own knowledge.\n"
+    "- If a tool returns no results, try a broader or rephrased query before giving up.\n"
+    "- If an order is not found, state that you could not find the order.\n"
+    "- When an order is cancelled, state that the order has been cancelled.\n"
+    "- If an order is not cancelled or cancellation is declined, state that the order "
+    "was not cancelled.\n\n"
     "To cancel an order, call cancel_order; the system will ask the customer to confirm. "
     "Be concise."
 )
@@ -67,24 +88,33 @@ def build_agent_graph(
         system_msgs = [m for m in msgs if isinstance(m, SystemMessage)]
         other_msgs = [m for m in msgs if not isinstance(m, SystemMessage)]
         ordered = system_msgs + other_msgs
-        if hasattr(bound_model, "invoke"):
-            message = bound_model.invoke(ordered)
-        elif hasattr(bound_model, "chat_with_tools"):
-            raw = bound_model.chat_with_tools(messages=ordered, tools=tool_defs)
-            if isinstance(raw, dict):
-                calls = [
-                    {
-                        "name": c["name"],
-                        "args": c.get("arguments") or c.get("args") or {},
-                        "id": c.get("id") or f"call_{c['name']}",
-                    }
-                    for c in raw.get("tool_calls", [])
-                ]
-                message = AIMessage(content=raw.get("content", ""), tool_calls=calls)
+        try:
+            if hasattr(bound_model, "invoke"):
+                message = bound_model.invoke(ordered)
+            elif hasattr(bound_model, "chat_with_tools"):
+                raw = bound_model.chat_with_tools(messages=ordered, tools=tool_defs)
+                if isinstance(raw, dict):
+                    calls = [
+                        {
+                            "name": c["name"],
+                            "args": c.get("arguments") or c.get("args") or {},
+                            "id": c.get("id") or f"call_{c['name']}",
+                        }
+                        for c in raw.get("tool_calls", [])
+                    ]
+                    message = AIMessage(content=raw.get("content", ""), tool_calls=calls)
+                else:
+                    message = raw
             else:
-                message = raw
-        else:
-            message = bound_model(ordered)
+                message = bound_model(ordered)
+        except Exception:
+            logger.exception("LLM invocation failed in agent node")
+            message = AIMessage(
+                content=(
+                    "I'm having trouble processing your request right now. "
+                    "Could you please try rephrasing your question?"
+                )
+            )
         return {"messages": [message], "iterations": state.get("iterations", 0) + 1}
 
     def route(state: AgentState) -> str:

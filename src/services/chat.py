@@ -111,10 +111,23 @@ class AgentService:
         }
         try:
             terminal = self.graph.invoke(payload, config)
-        except Exception:
+        except Exception as exc:
             logger.exception("agent failed", extra={"thread_id": thread_id})
+            # Provide a more specific message when the LLM backend is down
+            from llm.ollama import OllamaUnavailable
+
+            if isinstance(exc, OllamaUnavailable) or isinstance(exc.__cause__, OllamaUnavailable):
+                message = (
+                    "The language model is currently unavailable. "
+                    "Please ensure Ollama is running and try again."
+                )
+            else:
+                message = (
+                    "Something went wrong while processing your request. "
+                    "Please try rephrasing your question or try again shortly."
+                )
             return ChatReply(
-                message="The support agent is unavailable. Please try again.",
+                message=message,
                 status="unavailable",
                 total_duration_ms=self._ms(started),
             )

@@ -20,7 +20,12 @@ services:
     command:
       - /bin/sh
       - -c
-      - python scripts/seed_retail_data.py && python scripts/ingest_corpus.py
+      - |
+        if [ -f /app/data/.initialized ]; then
+          echo "Already initialized, skipping setup."
+          exit 0
+        fi
+        python scripts/seed_retail_data.py && python scripts/ingest_corpus.py && touch /app/data/.initialized
     restart: "no"
 
   app:

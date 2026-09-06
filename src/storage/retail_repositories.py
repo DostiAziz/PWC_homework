@@ -23,18 +23,31 @@ class ProductRepository:
         self.database = database
 
     def search(self, query: str, limit: int = 20, **_: object) -> tuple[ProductSummary, ...]:
-        needle = f"%{query.casefold()}%"
+        stripped = query.strip()
         with self.database.connect() as connection:
-            rows = connection.execute(
-                "SELECT p.product_id, p.name, p.category, p.price, p.currency, "
-                "COALESCE(SUM(i.quantity), 0) AS stock "
-                "FROM products p LEFT JOIN inventory i ON i.product_id = p.product_id "
-                "WHERE p.active = 1 AND "
-                "(lower(p.name) LIKE ? OR lower(p.category) LIKE ?) "
-                "GROUP BY p.product_id, p.name, p.category, p.price, p.currency "
-                "ORDER BY p.price LIMIT ?",
-                (needle, needle, limit),
-            ).fetchall()
+            if not stripped:
+                # Empty query: return all active products
+                rows = connection.execute(
+                    "SELECT p.product_id, p.name, p.category, p.price, p.currency, "
+                    "COALESCE(SUM(i.quantity), 0) AS stock "
+                    "FROM products p LEFT JOIN inventory i ON i.product_id = p.product_id "
+                    "WHERE p.active = 1 "
+                    "GROUP BY p.product_id, p.name, p.category, p.price, p.currency "
+                    "ORDER BY p.price LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                needle = f"%{stripped.casefold()}%"
+                rows = connection.execute(
+                    "SELECT p.product_id, p.name, p.category, p.price, p.currency, "
+                    "COALESCE(SUM(i.quantity), 0) AS stock "
+                    "FROM products p LEFT JOIN inventory i ON i.product_id = p.product_id "
+                    "WHERE p.active = 1 AND "
+                    "(lower(p.name) LIKE ? OR lower(p.category) LIKE ?) "
+                    "GROUP BY p.product_id, p.name, p.category, p.price, p.currency "
+                    "ORDER BY p.price LIMIT ?",
+                    (needle, needle, limit),
+                ).fetchall()
         return tuple(ProductSummary.model_validate(dict(row)) for row in rows)
 
     def list_active_offers(

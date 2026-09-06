@@ -17,7 +17,7 @@ def test_schemas_expose_five_tools() -> None:
         "search_products",
         "list_offers",
         "get_order_status",
-        "search_policies",
+        "search_knowledge_base",
         "cancel_order",
     }
 
@@ -36,9 +36,9 @@ def test_get_order_status_is_customer_scoped(retail_db: Database) -> None:
     assert "could not find" in other.content.lower()
 
 
-def test_search_policies_returns_citations(retail_db: Database) -> None:
+def test_search_knowledge_base_returns_citations(retail_db: Database) -> None:
     out = _registry(retail_db).run(
-        "search_policies", {"question": "how long is shipping?"}, customer_id="CUS-1001"
+        "search_knowledge_base", {"question": "how long is shipping?"}, customer_id="CUS-1001"
     )
     assert "[S1]" in out.content
     assert len(out.citations) >= 1
