@@ -11,15 +11,43 @@ def _registry(retail_db: Database) -> ToolRegistry:
     return ToolRegistry(ProductRepository(retail_db), OrderRepository(retail_db), rag)
 
 
-def test_schemas_expose_five_tools() -> None:
+def test_schemas_expose_six_tools() -> None:
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert names == {
         "search_products",
         "list_offers",
         "get_order_status",
+        "list_orders",
         "search_knowledge_base",
         "cancel_order",
     }
+
+
+def test_list_offers_without_category_returns_all(retail_db: Database) -> None:
+    registry = _registry(retail_db)
+    outcome = registry.run("list_offers", {}, customer_id="CUS-9999")
+    assert "Trail Shell" in outcome.content
+    assert "Expedition Kit" in outcome.content
+
+
+def test_list_orders_tool_lists_all_customer_orders(retail_db: Database) -> None:
+    registry = _registry(retail_db)
+    outcome = registry.run("list_orders", {}, customer_id="CUS-1002")
+    assert "ORD-3001" in outcome.content
+    assert "Total: 999.99" in outcome.content
+
+
+def test_list_orders_tool_filters_by_status(retail_db: Database) -> None:
+    registry = _registry(retail_db)
+    outcome = registry.run("list_orders", {"status": "shipped"}, customer_id="CUS-1001")
+    assert "ORD-5001" in outcome.content
+    assert "ORD-1001" not in outcome.content
+
+
+def test_list_orders_tool_empty_result(retail_db: Database) -> None:
+    registry = _registry(retail_db)
+    outcome = registry.run("list_orders", {}, customer_id="CUS-9999")
+    assert "You have no orders" in outcome.content
 
 
 def test_list_offers_returns_discounted_price(retail_db: Database) -> None:
