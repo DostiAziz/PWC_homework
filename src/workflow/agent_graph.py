@@ -68,21 +68,26 @@ class AgentState(TypedDict, total=False):
     iteration_limit: bool
 
 
-def _prepare_messages_for_llm(messages: list[BaseMessage | dict[str, Any]]) -> list[BaseMessage | dict[str, Any]]:
+def _prepare_messages_for_llm(
+    messages: list[BaseMessage | dict[str, Any]],
+) -> list[BaseMessage | dict[str, Any]]:
     """Format dialogue history by ensuring SystemMessage is strictly at index 0."""
     history = [
         m
         for m in messages
         if not (isinstance(m, SystemMessage) or (isinstance(m, dict) and m.get("role") == "system"))
     ]
-    return [SystemMessage(content=SYSTEM_PROMPT)] + history
+    return [SystemMessage(content=SYSTEM_PROMPT), *history]
 
 
-def _invoke_model(bound_model: Any, messages: list[Any], tool_defs: list[dict[str, Any]]) -> AIMessage:
+def _invoke_model(
+    bound_model: Any, messages: list[Any], tool_defs: list[dict[str, Any]]
+) -> AIMessage:
     """Invoke the underlying model supporting LangChain invoke, chat_with_tools, or callable."""
     try:
         if hasattr(bound_model, "invoke"):
-            return bound_model.invoke(messages)
+            res = bound_model.invoke(messages)
+            return res if isinstance(res, AIMessage) else AIMessage(content=str(res))
         elif hasattr(bound_model, "chat_with_tools"):
             raw = bound_model.chat_with_tools(messages=messages, tools=tool_defs)
             if isinstance(raw, dict):
@@ -95,9 +100,10 @@ def _invoke_model(bound_model: Any, messages: list[Any], tool_defs: list[dict[st
                     for c in raw.get("tool_calls", [])
                 ]
                 return AIMessage(content=raw.get("content", ""), tool_calls=calls)
-            return raw
+            return raw if isinstance(raw, AIMessage) else AIMessage(content=str(raw))
         else:
-            return bound_model(messages)
+            res = bound_model(messages)
+            return res if isinstance(res, AIMessage) else AIMessage(content=str(res))
     except Exception:
         logger.exception("LLM invocation failed in agent node")
         return AIMessage(
@@ -209,7 +215,7 @@ def build_agent_graph(
         }
 
     def agent(state: AgentState) -> dict[str, Any]:
-        ordered = _prepare_messages_for_llm(list(state["messages"]))
+        ordered = _prepare_messages_for_llm(list(state.get("messages", [])))
         message = _invoke_model(bound_model, ordered, tool_defs)
         return {"messages": [message], "iterations": state.get("iterations", 0) + 1}
 
@@ -317,7 +323,7 @@ def build_agent_graph(
             result["messages"] = extra_messages
         return result
 
-    builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)  # type: ignore[type-var]
+    builder: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)
     for name, fn in [
         ("intake", intake),
         ("agent", agent),
