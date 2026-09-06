@@ -20,11 +20,12 @@ def test_manifest_loads_curated_documents_and_preserves_attribution() -> None:
     manifest = load_manifest(root / "manifest.json")
     documents = load_documents(root, manifest)
 
-    assert len(documents) == 3
+    assert len(documents) == 4
     assert {item.source_id for item in documents} == {
         "shipping-and-orders",
         "cancellation-policy",
         "warranty-and-support",
+        "returns-policy",
     }
     assert all(item.language == "en" for item in documents)
     assert any(item.source_id == "shipping-and-orders" for item in documents)
